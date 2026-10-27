@@ -1,0 +1,50 @@
+{
+  "name": "project-phase3-67160177",
+  "version": "3.0.0",
+  "description": "Board Game Management System - Phase 3 (API + Notification Microservice + Frontend)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node scripts/start-all.js",
+    "dev": "node scripts/start-all.js --watch",
+    "start:api": "node src/index.js",
+    "start:notification": "node services/notification-service/index.js",
+    "mock:external": "node scripts/mock-external.js",
+    "test": "jest",
+    "test:coverage": "jest --coverage"
+  },
+  "keywords": [],
+  "author": "67160177",
+  "license": "ISC",
+  "type": "commonjs",
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "<rootDir>/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "services/**/*.js",
+      "db.js"
+    ],
+    "coverageReporters": [
+      "text",
+      "text-summary",
+      "lcov"
+    ]
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "js-yaml": "^4.1.0",
+    "morgan": "^1.11.0",
+    "mysql2": "^3.24.1",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.3.1"
+  }
+}

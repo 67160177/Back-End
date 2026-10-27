@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Board Game Manager</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎲%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">🎲</span>
+        <div>
+          <h1>Board Game Manager</h1>
+          <p class="subtitle">ระบบจัดการข้อมูลบอร์ดเกม</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" id="health-pill" class="pill pill-muted" title="กดเพื่อตรวจสถานะอีกครั้ง">
+          กำลังตรวจสถานะ...
+        </button>
+        <a class="link" href="/api-docs" target="_blank" rel="noopener">เอกสาร API</a>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- ===== รายการบอร์ดเกม ===== -->
+      <section class="panel" aria-labelledby="games-title">
+        <div class="panel-head">
+          <h2 id="games-title">รายการบอร์ดเกม</h2>
+          <div class="toolbar">
+            <label class="sr-only" for="filter-category">กรองตามหมวดหมู่</label>
+            <select id="filter-category">
+              <option value="">ทุกหมวดหมู่</option>
+            </select>
+            <button type="button" id="refresh-games" class="btn btn-ghost">โหลดใหม่</button>
+          </div>
+        </div>
+
+        <div id="games-status" class="status" role="status" aria-live="polite"></div>
+        <ul id="games-list" class="game-list"></ul>
+      </section>
+
+      <aside class="side">
+        <!-- ===== ฟอร์มเพิ่ม/แก้ไขบอร์ดเกม ===== -->
+        <section class="panel" aria-labelledby="game-form-title">
+          <h2 id="game-form-title">เพิ่มบอร์ดเกม</h2>
+          <form id="game-form" novalidate>
+            <div class="field">
+              <label for="game-name">ชื่อบอร์ดเกม</label>
+              <input id="game-name" name="name" type="text" maxlength="100" autocomplete="off" placeholder="เช่น Carcassonne" />
+              <p class="field-error" id="game-name-error"></p>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="game-min">ผู้เล่นขั้นต่ำ</label>
+                <input id="game-min" name="minPlayers" type="number" min="1" step="1" inputmode="numeric" placeholder="2" />
+                <p class="field-error" id="game-min-error"></p>
+              </div>
+              <div class="field">
+                <label for="game-max">ผู้เล่นสูงสุด</label>
+                <input id="game-max" name="maxPlayers" type="number" min="1" step="1" inputmode="numeric" placeholder="5" />
+                <p class="field-error" id="game-max-error"></p>
+              </div>
+            </div>
+            <p class="form-error" id="game-form-error" role="alert"></p>
+            <div class="form-actions">
+              <button type="submit" id="game-submit" class="btn btn-primary">เพิ่มบอร์ดเกม</button>
+              <button type="button" id="game-cancel" class="btn btn-ghost" hidden>ยกเลิก</button>
+            </div>
+          </form>
+        </section>
+
+        <!-- ===== ฟอร์มเพิ่มหมวดหมู่ ===== -->
+        <section class="panel" aria-labelledby="category-form-title">
+          <h2 id="category-form-title">เพิ่มหมวดหมู่</h2>
+          <form id="category-form" novalidate>
+            <div class="field">
+              <label for="category-name">ชื่อหมวดหมู่</label>
+              <input id="category-name" name="name" type="text" maxlength="100" autocomplete="off" placeholder="เช่น Co-op" />
+              <p class="field-error" id="category-name-error"></p>
+            </div>
+            <p class="form-error" id="category-form-error" role="alert"></p>
+            <button type="submit" id="category-submit" class="btn btn-primary">เพิ่มหมวดหมู่</button>
+          </form>
+        </section>
+
+        <!-- ===== การแจ้งเตือนจาก notification-service ===== -->
+        <section class="panel" aria-labelledby="notif-title">
+          <div class="panel-head">
+            <h2 id="notif-title">การแจ้งเตือนล่าสุด</h2>
+            <button type="button" id="refresh-notifs" class="btn btn-ghost btn-small">โหลดใหม่</button>
+          </div>
+          <p class="hint">จาก notification-service (microservice)</p>
+          <div id="notifs-status" class="status" role="status" aria-live="polite"></div>
+          <ul id="notifs-list" class="notif-list"></ul>
+        </section>
+      </aside>
+    </main>
+
+    <!-- ===== หน้าต่างจัดการหมวดหมู่ของบอร์ดเกม ===== -->
+    <dialog id="categories-dialog" aria-labelledby="dialog-title">
+      <div class="dialog-head">
+        <h2 id="dialog-title">หมวดหมู่ของเกม</h2>
+        <button type="button" id="dialog-close" class="btn btn-ghost btn-small" aria-label="ปิด">✕</button>
+      </div>
+      <div id="dialog-status" class="status" role="status" aria-live="polite"></div>
+      <ul id="dialog-list" class="chip-list"></ul>
+      <form id="link-form" class="link-form" novalidate>
+        <label class="sr-only" for="link-category">เลือกหมวดหมู่ที่จะเพิ่ม</label>
+        <select id="link-category"></select>
+        <button type="submit" id="link-submit" class="btn btn-primary btn-small">เพิ่ม</button>
+      </form>
+      <p class="form-error" id="link-form-error" role="alert"></p>
+    </dialog>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
