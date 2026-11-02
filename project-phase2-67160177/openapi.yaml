@@ -1,0 +1,893 @@
+openapi: 3.0.3
+
+info:
+  title: Board Game Management API
+  version: 1.0.0
+  description: |
+    API สำหรับระบบจัดการข้อมูลบอร์ดเกม (Board Game Management System)
+    จัดการข้อมูลบอร์ดเกม หมวดหมู่ และความสัมพันธ์แบบ Many-to-Many ระหว่างสองสิ่งนี้
+
+    **รูปแบบ Response**
+    - สำเร็จ: `{ "message": "...", "data": ... }`
+    - ผิดพลาด: `{ "error": { "code": "...", "message": "..." } }`
+
+    **ข้อควรทราบ**
+    - ขนาด request body สูงสุด 10 KB (เกินจะได้ 413)
+    - ถ้า JSON ใน body ผิดรูปแบบ จะได้ 400 พร้อม `error.code = "entity.parse.failed"`
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+
+tags:
+  - name: Boardgames
+    description: จัดการข้อมูลบอร์ดเกม
+  - name: Categories
+    description: จัดการหมวดหมู่
+  - name: Boardgame Categories
+    description: จัดการความสัมพันธ์ระหว่างบอร์ดเกมกับหมวดหมู่
+
+paths:
+  /boardgames:
+    get:
+      tags: [Boardgames]
+      summary: ดึงรายการบอร์ดเกมทั้งหมด
+      description: |
+        คืนรายการบอร์ดเกมพร้อมชื่อหมวดหมู่ (คั่นด้วยจุลภาค) รองรับการกรองตามหมวดหมู่
+
+        - ถ้าส่งทั้ง `category` และ `category_id` จะใช้ `category` เท่านั้น
+        - เมื่อกรองตามหมวดหมู่ ฟิลด์ `categories` ของแต่ละเกมจะแสดงเฉพาะหมวดหมู่ที่ตรงกับตัวกรอง
+      parameters:
+        - name: category
+          in: query
+          required: false
+          description: ชื่อหมวดหมู่ (ไม่สนใจตัวพิมพ์เล็กใหญ่)
+          schema:
+            type: string
+            example: strategy
+        - name: category_id
+          in: query
+          required: false
+          description: ID ของหมวดหมู่
+          schema:
+            type: integer
+            example: 1
+      responses:
+        "200":
+          description: สำเร็จ (ถ้าไม่พบข้อมูลที่ตรงเงื่อนไข จะได้ `data` เป็นอาร์เรย์ว่าง)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Boardgame"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    post:
+      tags: [Boardgames]
+      summary: เพิ่มบอร์ดเกมใหม่
+      description: |
+        เมื่อเพิ่มสำเร็จ ระบบจะส่งแจ้งเตือนไปที่ Discord (API ภายนอก) ด้วย
+        โดยมี timeout, retry (ลองใหม่เมื่อ network error / timeout / 5xx) และ fallback
+
+        ถ้าแจ้งเตือนไม่สำเร็จ ระบบยังตอบ 201 ตามปกติ โดยฟิลด์ `notification.sent` จะเป็น `false`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BoardgameInput"
+      responses:
+        "201":
+          description: เพิ่มบอร์ดเกมสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: เพิ่มบอร์ดเกมสำเร็จ
+                  data:
+                    $ref: "#/components/schemas/BoardgameBase"
+                  notification:
+                    $ref: "#/components/schemas/Notification"
+        "400":
+          description: ข้อมูลไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                missingFields:
+                  summary: ส่งข้อมูลไม่ครบ
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ name, minPlayers และ maxPlayers ให้ครบถ้วน
+                invalidPlayers:
+                  summary: จำนวนผู้เล่นไม่ใช่จำนวนเต็ม
+                  value:
+                    error:
+                      code: INVALID_PLAYERS
+                      message: minPlayers และ maxPlayers ต้องเป็นตัวเลขจำนวนเต็ม
+                invalidPlayerRange:
+                  summary: ช่วงจำนวนผู้เล่นไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_PLAYER_RANGE
+                      message: จำนวนผู้เล่นต้องมีค่าอย่างน้อย 1 และ maxPlayers ต้องมากกว่าหรือเท่ากับ minPlayers
+        "409":
+          $ref: "#/components/responses/DuplicateName"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /boardgames/{id}:
+    parameters:
+      - $ref: "#/components/parameters/BoardgameId"
+
+    get:
+      tags: [Boardgames]
+      summary: ดึงข้อมูลบอร์ดเกมตาม ID
+      responses:
+        "200":
+          description: สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/Boardgame"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    put:
+      tags: [Boardgames]
+      summary: แก้ไขข้อมูลบอร์ดเกมทั้งระเบียน
+      description: ต้องส่งครบทุกฟิลด์ (`name`, `minPlayers`, `maxPlayers`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BoardgameInput"
+      responses:
+        "200":
+          description: แก้ไขสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: แก้ไขข้อมูลบอร์ดเกมสำเร็จ
+                  data:
+                    $ref: "#/components/schemas/BoardgameBase"
+        "400":
+          description: id หรือข้อมูลที่ส่งมาไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                missingFields:
+                  summary: ส่งข้อมูลไม่ครบ
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ name, minPlayers และ maxPlayers ให้ครบถ้วน
+                invalidPlayers:
+                  summary: จำนวนผู้เล่นไม่ใช่จำนวนเต็ม
+                  value:
+                    error:
+                      code: INVALID_PLAYERS
+                      message: minPlayers และ maxPlayers ต้องเป็นตัวเลขจำนวนเต็ม
+                invalidPlayerRange:
+                  summary: ช่วงจำนวนผู้เล่นไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_PLAYER_RANGE
+                      message: จำนวนผู้เล่นไม่ถูกต้อง
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "409":
+          $ref: "#/components/responses/DuplicateName"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    patch:
+      tags: [Boardgames]
+      summary: แก้ไขข้อมูลบอร์ดเกมบางฟิลด์
+      description: |
+        ส่งเฉพาะฟิลด์ที่ต้องการแก้ไข ระบบจะนำค่าที่ส่งมารวมกับค่าเดิม
+        แล้วตรวจว่า `maxPlayers >= minPlayers` และ `minPlayers >= 1`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BoardgamePatchInput"
+      responses:
+        "200":
+          description: แก้ไขสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: แก้ไขข้อมูลบอร์ดเกมสำเร็จ
+                  data:
+                    $ref: "#/components/schemas/BoardgameBase"
+        "400":
+          description: id หรือข้อมูลที่ส่งมาไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                noUpdates:
+                  summary: ไม่ได้ส่งฟิลด์ใดมาเลย
+                  value:
+                    error:
+                      code: NO_UPDATES
+                      message: กรุณาระบุข้อมูลที่ต้องการแก้ไข
+                invalidField:
+                  summary: ส่งฟิลด์ที่ไม่อนุญาต
+                  value:
+                    error:
+                      code: INVALID_FIELD
+                      message: "ไม่อนุญาตให้แก้ไข field: price"
+                invalidName:
+                  summary: name ว่างหรือไม่ใช่ข้อความ
+                  value:
+                    error:
+                      code: INVALID_NAME
+                      message: name ต้องเป็นข้อความที่ไม่ว่างเปล่า
+                invalidPlayers:
+                  summary: จำนวนผู้เล่นไม่ใช่จำนวนเต็ม
+                  value:
+                    error:
+                      code: INVALID_PLAYERS
+                      message: maxPlayers ต้องเป็นตัวเลขจำนวนเต็ม
+                invalidPlayerRange:
+                  summary: ค่ารวมแล้ว maxPlayers น้อยกว่า minPlayers
+                  value:
+                    error:
+                      code: INVALID_PLAYER_RANGE
+                      message: จำนวนผู้เล่นต้องมีค่าอย่างน้อย 1 และ maxPlayers ต้องมากกว่าหรือเท่ากับ minPlayers
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "409":
+          $ref: "#/components/responses/DuplicateName"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    delete:
+      tags: [Boardgames]
+      summary: ลบบอร์ดเกม
+      description: ความสัมพันธ์กับหมวดหมู่ของเกมนี้จะถูกลบตามไปด้วย (ON DELETE CASCADE)
+      responses:
+        "200":
+          description: ลบสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOnly"
+              example:
+                message: ลบบอร์ดเกมสำเร็จ
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /categories:
+    get:
+      tags: [Categories]
+      summary: ดึงรายการหมวดหมู่ทั้งหมด
+      description: คืนหมวดหมู่ทุกรายการพร้อมจำนวนบอร์ดเกมในแต่ละหมวด (`boardgameCount`)
+      responses:
+        "200":
+          description: สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CategoryWithCount"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    post:
+      tags: [Categories]
+      summary: เพิ่มหมวดหมู่ใหม่
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryInput"
+      responses:
+        "201":
+          description: เพิ่มหมวดหมู่สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: เพิ่มหมวดหมู่สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/CategoryNameInvalid"
+        "409":
+          $ref: "#/components/responses/DuplicateCategory"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /categories/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CategoryId"
+
+    get:
+      tags: [Categories]
+      summary: ดึงข้อมูลหมวดหมู่ตาม ID
+      responses:
+        "200":
+          description: สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/CategoryWithCount"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/CategoryNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    put:
+      tags: [Categories]
+      summary: แก้ไขชื่อหมวดหมู่
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryInput"
+      responses:
+        "200":
+          description: แก้ไขสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: แก้ไขหมวดหมู่สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "400":
+          description: id หรือ name ไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                missingFields:
+                  summary: ไม่ได้ส่ง name
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ name
+                invalidName:
+                  summary: name ว่างหรือยาวเกิน 100 ตัวอักษร
+                  value:
+                    error:
+                      code: INVALID_NAME
+                      message: name ต้องเป็นข้อความที่ไม่ว่างเปล่าและยาวไม่เกิน 100 ตัวอักษร
+        "404":
+          $ref: "#/components/responses/CategoryNotFound"
+        "409":
+          $ref: "#/components/responses/DuplicateCategory"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    delete:
+      tags: [Categories]
+      summary: ลบหมวดหมู่
+      description: ความสัมพันธ์กับบอร์ดเกมของหมวดนี้จะถูกลบตามไปด้วย (ON DELETE CASCADE) แต่ตัวบอร์ดเกมไม่ถูกลบ
+      responses:
+        "200":
+          description: ลบสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOnly"
+              example:
+                message: ลบหมวดหมู่สำเร็จ
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/CategoryNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /boardgames/{id}/categories:
+    parameters:
+      - $ref: "#/components/parameters/BoardgameId"
+
+    get:
+      tags: [Boardgame Categories]
+      summary: ดึงหมวดหมู่ทั้งหมดของบอร์ดเกม
+      responses:
+        "200":
+          description: สำเร็จ (ถ้าเกมยังไม่มีหมวดหมู่ จะได้ `data` เป็นอาร์เรย์ว่าง)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+    post:
+      tags: [Boardgame Categories]
+      summary: เพิ่มหมวดหมู่ให้บอร์ดเกม
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryLinkInput"
+      responses:
+        "201":
+          description: เพิ่มหมวดหมู่ให้บอร์ดเกมสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: เพิ่มหมวดหมู่ให้บอร์ดเกมสำเร็จ
+                  data:
+                    type: object
+                    properties:
+                      boardgame_id:
+                        type: integer
+                        example: 2
+                      category:
+                        $ref: "#/components/schemas/Category"
+        "400":
+          description: id หรือ category_id ไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id หรือ category_id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: category_id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                missingFields:
+                  summary: ไม่ได้ส่ง category_id
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ category_id
+        "404":
+          description: ไม่พบบอร์ดเกมหรือไม่พบหมวดหมู่
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                boardgameNotFound:
+                  summary: ไม่พบบอร์ดเกม
+                  value:
+                    error:
+                      code: NOT_FOUND
+                      message: ไม่พบบอร์ดเกม
+                categoryNotFound:
+                  summary: ไม่พบหมวดหมู่
+                  value:
+                    error:
+                      code: CATEGORY_NOT_FOUND
+                      message: ไม่พบหมวดหมู่
+        "409":
+          description: บอร์ดเกมนี้อยู่ในหมวดหมู่นี้อยู่แล้ว
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: ALREADY_LINKED
+                  message: บอร์ดเกมนี้อยู่ในหมวดหมู่นี้อยู่แล้ว
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /boardgames/{id}/categories/{categoryId}:
+    delete:
+      tags: [Boardgame Categories]
+      summary: ถอดหมวดหมู่ออกจากบอร์ดเกม
+      description: ลบเฉพาะความสัมพันธ์ ไม่ลบบอร์ดเกมหรือหมวดหมู่
+      parameters:
+        - $ref: "#/components/parameters/BoardgameId"
+        - name: categoryId
+          in: path
+          required: true
+          description: ID ของหมวดหมู่
+          schema:
+            type: integer
+            minimum: 1
+            example: 1
+      responses:
+        "200":
+          description: ถอดหมวดหมู่สำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOnly"
+              example:
+                message: ถอดหมวดหมู่ออกจากบอร์ดเกมสำเร็จ
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          description: ไม่พบความสัมพันธ์ระหว่างบอร์ดเกมกับหมวดหมู่นี้
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: LINK_NOT_FOUND
+                  message: ไม่พบความสัมพันธ์ระหว่างบอร์ดเกมกับหมวดหมู่นี้
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+components:
+  parameters:
+    BoardgameId:
+      name: id
+      in: path
+      required: true
+      description: ID ของบอร์ดเกม (จำนวนเต็มบวก)
+      schema:
+        type: integer
+        minimum: 1
+        example: 1
+    CategoryId:
+      name: id
+      in: path
+      required: true
+      description: ID ของหมวดหมู่ (จำนวนเต็มบวก)
+      schema:
+        type: integer
+        minimum: 1
+        example: 1
+
+  schemas:
+    Boardgame:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Catan
+        minPlayers:
+          type: integer
+          example: 3
+        maxPlayers:
+          type: integer
+          example: 4
+        categories:
+          type: string
+          nullable: true
+          description: ชื่อหมวดหมู่คั่นด้วยจุลภาค เป็น `null` ถ้าเกมยังไม่มีหมวดหมู่
+          example: Strategy,Party Game
+
+    BoardgameBase:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 4
+        name:
+          type: string
+          example: Carcassonne
+        minPlayers:
+          type: integer
+          example: 2
+        maxPlayers:
+          type: integer
+          example: 5
+
+    BoardgameInput:
+      type: object
+      required: [name, minPlayers, maxPlayers]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: ชื่อบอร์ดเกม (ห้ามซ้ำกับที่มีอยู่)
+          example: Carcassonne
+        minPlayers:
+          type: integer
+          minimum: 1
+          example: 2
+        maxPlayers:
+          type: integer
+          minimum: 1
+          description: ต้องมากกว่าหรือเท่ากับ `minPlayers`
+          example: 5
+
+    BoardgamePatchInput:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: Carcassonne Deluxe
+        minPlayers:
+          type: integer
+          minimum: 1
+          example: 2
+        maxPlayers:
+          type: integer
+          minimum: 1
+          example: 6
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Strategy
+
+    CategoryWithCount:
+      allOf:
+        - $ref: "#/components/schemas/Category"
+        - type: object
+          properties:
+            boardgameCount:
+              type: integer
+              description: จำนวนบอร์ดเกมในหมวดหมู่นี้
+              example: 2
+
+    CategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: ชื่อหมวดหมู่ (ห้ามซ้ำกับที่มีอยู่)
+          example: Co-op
+
+    CategoryLinkInput:
+      type: object
+      required: [category_id]
+      properties:
+        category_id:
+          type: integer
+          minimum: 1
+          example: 2
+
+    Notification:
+      type: object
+      description: ผลการส่งแจ้งเตือนไปยัง API ภายนอก (Discord Webhook)
+      properties:
+        sent:
+          type: boolean
+          description: ส่งแจ้งเตือนสำเร็จหรือไม่
+          example: true
+        attempts:
+          type: integer
+          description: จำนวนครั้งที่เรียก API ภายนอก (ครั้งแรก + retry)
+          example: 1
+        message:
+          type: string
+          example: ส่งแจ้งเตือนไปที่ Discord แล้ว
+
+    MessageOnly:
+      type: object
+      properties:
+        message:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: รหัสข้อผิดพลาดสำหรับให้โปรแกรมนำไปใช้
+            message:
+              type: string
+              description: ข้อความอธิบายข้อผิดพลาด
+
+  responses:
+    InvalidId:
+      description: id ไม่ถูกต้อง (ต้องเป็นจำนวนเต็มบวก)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: INVALID_ID
+              message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+
+    BoardgameNotFound:
+      description: ไม่พบบอร์ดเกม
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: NOT_FOUND
+              message: ไม่พบบอร์ดเกม
+
+    CategoryNotFound:
+      description: ไม่พบหมวดหมู่
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: CATEGORY_NOT_FOUND
+              message: ไม่พบหมวดหมู่
+
+    DuplicateName:
+      description: มีชื่อบอร์ดเกมนี้อยู่ในระบบแล้ว
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: DUPLICATE_NAME
+              message: มีชื่อบอร์ดเกมนี้อยู่ในระบบแล้ว
+
+    DuplicateCategory:
+      description: มีชื่อหมวดหมู่นี้อยู่ในระบบแล้ว
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: DUPLICATE_CATEGORY
+              message: มีชื่อหมวดหมู่นี้อยู่ในระบบแล้ว
+
+    CategoryNameInvalid:
+      description: name ไม่ถูกต้อง
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            missingFields:
+              summary: ไม่ได้ส่ง name
+              value:
+                error:
+                  code: MISSING_FIELDS
+                  message: กรุณาระบุ name
+            invalidName:
+              summary: name ว่างหรือยาวเกิน 100 ตัวอักษร
+              value:
+                error:
+                  code: INVALID_NAME
+                  message: name ต้องเป็นข้อความที่ไม่ว่างเปล่าและยาวไม่เกิน 100 ตัวอักษร
+
+    PayloadTooLarge:
+      description: request body ใหญ่เกิน 10 KB
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: entity.too.large
+              message: request entity too large
+
+    ServerError:
+      description: เกิดข้อผิดพลาดภายในระบบ (เช่น เชื่อมต่อฐานข้อมูลไม่ได้)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: INTERNAL_SERVER_ERROR
+              message: เกิดข้อผิดพลาดที่ไม่คาดคิดภายในระบบ

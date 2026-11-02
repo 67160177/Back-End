@@ -1,0 +1,28 @@
+{
+  "name": "project-phase2-67160177-boardgames",
+  "version": "2.0.0",
+  "description": "Board Game Management API - Phase 2 (OpenAPI docs and external integration)",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "js-yaml": "^4.1.0",
+    "morgan": "^1.11.0",
+    "mysql2": "^3.24.1",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

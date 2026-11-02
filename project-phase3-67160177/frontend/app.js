@@ -1,140 +1,95 @@
 // ==========================================
 // Board Game Manager - Frontend (HTML/CSS/JavaScript ล้วน)
-// เรียกใช้ API จริงของระบบผ่าน fetch
+// ทุกคำขอส่งไปที่ API Gateway (พอร์ต 3000) ด้วย fetch
+// ดูข้อมูลได้ทุกคน / เพิ่มและแก้ไขต้องเข้าสู่ระบบ (แนบ JWT ใน header Authorization) / ลบบอร์ดเกมและหมวดหมู่เฉพาะ admin
 //
-// endpoint ที่ใช้:
-//   GET    /api/v1/health                       สถานะระบบ (มุมขวาบน)
-//   GET    /api/v1/boardgames?category_id=      รายการบอร์ดเกม (+ กรองหมวดหมู่)
-//   POST   /api/v1/boardgames                   เพิ่มบอร์ดเกม
-//   PUT    /api/v1/boardgames/:id               แก้ไขบอร์ดเกม
-//   DELETE /api/v1/boardgames/:id               ลบบอร์ดเกม
-//   GET    /api/v1/categories                   รายการหมวดหมู่
-//   POST   /api/v1/categories                   เพิ่มหมวดหมู่
-//   GET    /api/v1/boardgames/:id/categories    หมวดหมู่ของเกม
-//   POST   /api/v1/boardgames/:id/categories    ผูกหมวดหมู่กับเกม
-//   DELETE /api/v1/boardgames/:id/categories/:c ถอดหมวดหมู่
-//   GET    /api/v1/notifications                ประวัติจาก notification-service
+// ปุ่ม/ส่วนบนหน้าเว็บ           -> ฟังก์ชัน              -> endpoint ที่เรียก
+// -------------------------------------------------------------------------------------
+// ฟอร์ม "เข้าสู่ระบบ"            -> login()               -> POST   /api/v1/auth/login
+// ฟอร์ม "สมัครสมาชิก"           -> register()            -> POST   /api/v1/auth/register
+// เปิดหน้า (มี token เดิม)        -> restoreSession()      -> GET    /api/v1/auth/me
+// ป้ายสถานะมุมขวาบน             -> loadHealth()          -> GET    /api/v1/health
+// รายการบอร์ดเกม (เรียง/หน้า)     -> loadGames()           -> GET    /api/v1/boardgames?page=&limit=&sort=&order=
+// ฟอร์ม "เพิ่มบอร์ดเกม"           -> addGame()             -> POST   /api/v1/boardgames
+// ปุ่ม "แก้ไข" แล้วกดบันทึก        -> updateGame()          -> PUT    /api/v1/boardgames/:id
+// ปุ่ม "ลบ"                     -> deleteGame()          -> DELETE /api/v1/boardgames/:id (admin)
+// ตัวเลือกในหน้าต่างหมวดหมู่       -> loadCategories()      -> GET    /api/v1/categories
+// ฟอร์ม "เพิ่มหมวดหมู่"           -> addCategory()         -> POST   /api/v1/categories
+// กดชื่อหมวดหมู่ แล้วกดบันทึก       -> updateCategory()      -> PUT    /api/v1/categories/:id
+// ปุ่ม "✕" ในหมวดหมู่ทั้งหมด       -> deleteCategory()      -> DELETE /api/v1/categories/:id (admin)
+// ปุ่ม "หมวดหมู่" ของแต่ละเกม     -> loadGameCategories()  -> GET    /api/v1/boardgames/:id/categories
+// ปุ่ม "เพิ่ม" ในหน้าต่างหมวดหมู่   -> linkCategory()        -> POST   /api/v1/boardgames/:id/categories
+// ปุ่ม "✕" ที่หมวดหมู่ของเกม       -> unlinkCategory()      -> DELETE /api/v1/boardgames/:id/categories/:categoryId
+// "การแจ้งเตือนล่าสุด"            -> loadNotifications()   -> GET    /api/v1/notifications
 // ==========================================
 
-// เปิดผ่าน API (http://localhost:3000/app) ใช้ origin เดียวกันได้เลย
-// ถ้าเปิดไฟล์จากที่อื่น (เช่น Live Server) ให้ชี้ไปที่ API ตรงๆ
+// เปิดผ่าน Gateway (http://localhost:3000/app) ใช้ origin เดียวกัน
+// ถ้าเปิดไฟล์จากที่อื่น (เช่น Live Server) ให้ชี้ไปที่ Gateway ตรงๆ
 const API_BASE = window.location.pathname.startsWith("/app")
   ? ""
   : "http://localhost:3000";
 
-const REQUEST_TIMEOUT_MS = 10000;
-const NAME_MAX_LENGTH = 100;
-const MAX_PLAYERS = 2147483647;
-
 // ==========================================
-// API helper
+// ฟังก์ชันกลางสำหรับเรียก API
 // ==========================================
 
-class ApiError extends Error {
-  constructor(message, status) {
-    super(message);
-    this.status = status;
+// เรียก API แล้วคืน JSON ที่ได้ ถ้า API ตอบ error (4xx/5xx) จะ throw Error พร้อมข้อความจาก API
+// ถ้าเข้าสู่ระบบอยู่ แนบ token ไปทุกคำขอ / ถ้า Gateway ตอบ 401 (token หมดอายุ) ออกจากระบบให้อัตโนมัติ
+async function callApi(method, path, body) {
+  const options = { method, headers: {} };
+  if (body) {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
   }
-}
+  if (session) options.headers.Authorization = `Bearer ${session.token}`;
 
-// เรียก API แล้วคืน body (JSON) ถ้าไม่สำเร็จจะ throw ApiError พร้อมข้อความที่แสดงให้ผู้ใช้ได้
-async function api(path, { method = "GET", body } = {}) {
   let response;
-
   try {
-    response = await fetch(API_BASE + path, {
-      method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (err) {
-    if (err.name === "TimeoutError") {
-      throw new ApiError("เซิร์ฟเวอร์ตอบช้าเกินไป กรุณาลองใหม่", 0);
-    }
-    throw new ApiError(
-      "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจสอบว่าเซิร์ฟเวอร์ API ทำงานอยู่",
-      0,
-    );
+    response = await fetch(API_BASE + path, options);
+  } catch {
+    throw new Error("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจสอบว่ารัน npm start แล้ว");
   }
 
   const data = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const message =
-      data?.error?.message || `เกิดข้อผิดพลาด (HTTP ${response.status})`;
-    throw new ApiError(message, response.status);
+  if (response.status === 401 && session && !path.startsWith("/api/v1/auth/login")) {
+    clearSession();
+    toast("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่", "warn");
+    openAuthDialog("login");
   }
-
+  if (!response.ok) {
+    // API ตอบ error รูปแบบ { error: { code, message } }
+    throw new Error(
+      data?.error?.message || `เกิดข้อผิดพลาด (HTTP ${response.status})`,
+    );
+  }
   return data;
 }
 
 // ==========================================
-// DOM helpers (ใช้ textContent เสมอ กันข้อมูลจากผู้ใช้กลายเป็น HTML)
+// ตัวช่วยเล็กๆ
 // ==========================================
 
 const $ = (id) => document.getElementById(id);
 
-function el(tag, props = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (key === "text") node.textContent = value;
-    else if (key === "class") node.className = value;
-    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-    else node.setAttribute(key, value);
-  }
-  for (const child of [].concat(children)) {
-    if (child) node.append(child);
-  }
-  return node;
+// แปลงอักขระพิเศษก่อนใส่ใน innerHTML กันชื่อเกมอย่าง <img onerror=...> ถูกรันเป็นโค้ด (XSS)
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
-function showLoading(container, text) {
-  container.className = "status";
-  container.replaceChildren(el("span", { class: "spinner" }), text);
-}
-
-function showError(container, message, onRetry) {
-  container.className = "status is-error";
-  container.replaceChildren(el("span", { text: message }));
-  if (onRetry) {
-    container.append(
-      el("button", {
-        type: "button",
-        class: "btn btn-ghost btn-small",
-        text: "ลองใหม่",
-        onclick: onRetry,
-      }),
-    );
-  }
-}
-
-function showInfo(container, text) {
-  container.className = "status";
-  container.textContent = text;
-}
-
-function clearStatus(container) {
-  container.className = "status";
-  container.replaceChildren();
-}
-
-const MAX_TOASTS = 3;
-
+// ข้อความแจ้งผลมุมขวาล่าง หายไปเองใน 4 วินาที
 function toast(message, type = "ok") {
-  const container = $("toasts");
-  const node = el("div", {
-    class: `toast${type === "ok" ? "" : ` is-${type}`}`,
-    role: type === "error" ? "alert" : "status",
-    text: message,
-  });
-  container.append(node);
-  // แสดงพร้อมกันไม่เกิน 3 อัน ไม่ให้บังหน้าจอ
-  while (container.children.length > MAX_TOASTS) container.firstChild.remove();
-  setTimeout(() => node.remove(), 5000);
+  const box = document.createElement("div");
+  box.className = type === "ok" ? "toast" : `toast is-${type}`;
+  box.textContent = message;
+  $("toasts").append(box);
+  setTimeout(() => box.remove(), 4000);
 }
 
-// ปุ่มระหว่างรอ API: กดซ้ำไม่ได้ และเปลี่ยนข้อความให้เห็นว่ากำลังทำงาน
+// ระหว่างรอ API: ปิดปุ่มและเปลี่ยนข้อความ กันกดซ้ำ แล้วคืนค่าเดิมเมื่อเสร็จ (สำเร็จหรือไม่ก็ตาม)
 async function withBusyButton(button, busyText, task) {
   const original = button.textContent;
   button.disabled = true;
@@ -143,505 +98,719 @@ async function withBusyButton(button, busyText, task) {
     return await task();
   } finally {
     button.disabled = false;
-    // คืนข้อความเดิม เว้นแต่ task เปลี่ยนข้อความปุ่มเอง (เช่น ออกจากโหมดแก้ไข)
-    if (button.textContent === busyText) button.textContent = original;
+    button.textContent = original;
   }
 }
 
 // ==========================================
-// State
+// ตรวจข้อมูลฟอร์มฝั่ง Frontend ก่อนส่ง (กฎเดียวกับ API ใน src/index.js)
+// ถ้าไม่ผ่าน จะไม่ส่งคำขอไป API เลย และแสดงข้อความใต้ช่องที่ผิด
 // ==========================================
 
-const state = {
-  games: [],
-  categories: [],
-  editingId: null, // id ของเกมที่กำลังแก้ไข (null = โหมดเพิ่ม)
-  dialogGame: null, // เกมที่เปิดหน้าต่างจัดการหมวดหมู่อยู่
+const NAME_MAX_LENGTH = 100; // ตรงกับ VARCHAR(100) ใน schema.sql
+
+// คืน object { ชื่อช่อง: ข้อความ error } ถ้าว่าง = ผ่าน
+function validateGame({ name, minPlayers, maxPlayers }) {
+  const errors = {};
+  if (name === "") errors.name = "กรุณากรอกชื่อบอร์ดเกม";
+  else if (name.length > NAME_MAX_LENGTH)
+    errors.name = `ชื่อยาวได้ไม่เกิน ${NAME_MAX_LENGTH} ตัวอักษร`;
+
+  if (!Number.isInteger(minPlayers) || minPlayers < 1)
+    errors.min = "ต้องเป็นจำนวนเต็มตั้งแต่ 1 ขึ้นไป";
+  if (!Number.isInteger(maxPlayers) || maxPlayers < 1)
+    errors.max = "ต้องเป็นจำนวนเต็มตั้งแต่ 1 ขึ้นไป";
+  else if (!errors.min && maxPlayers < minPlayers)
+    errors.max = "ต้องมากกว่าหรือเท่ากับผู้เล่นขั้นต่ำ";
+  return errors;
+}
+
+function validateCategory(name) {
+  if (name === "") return { name: "กรุณากรอกชื่อหมวดหมู่" };
+  if (name.length > NAME_MAX_LENGTH)
+    return { name: `ชื่อยาวได้ไม่เกิน ${NAME_MAX_LENGTH} ตัวอักษร` };
+  return {};
+}
+
+// แสดง error ใต้แต่ละช่อง + ทำกรอบแดง (aria-invalid) แล้วเลื่อนเคอร์เซอร์ไปช่องแรกที่ผิด
+// fields = { ชื่อช่อง: id ของ input } เช่น { name: "game-name" }
+function showFieldErrors(fields, errors) {
+  let firstInvalid = null;
+  for (const [key, inputId] of Object.entries(fields)) {
+    const message = errors[key] || "";
+    $(`${inputId}-error`).textContent = message;
+    $(inputId).setAttribute("aria-invalid", message ? "true" : "false");
+    if (message && !firstInvalid) firstInvalid = $(inputId);
+  }
+  firstInvalid?.focus();
+  return firstInvalid === null;
+}
+
+// กฎเดียวกับ auth-service
+const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,30}$/;
+const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 72;
+
+// ตอนเข้าสู่ระบบตรวจแค่ว่ากรอกครบ ตอนสมัครตรวจรูปแบบและยืนยันรหัสผ่านด้วย
+function validateAuth({ username, password, confirm }, mode) {
+  const errors = {};
+  if (username === "") errors.username = "กรุณากรอกชื่อผู้ใช้";
+  else if (mode === "register" && !USERNAME_PATTERN.test(username))
+    errors.username = "ยาว 3-30 ตัว ใช้ได้เฉพาะ a-z, A-Z, 0-9 และ _";
+
+  if (password === "") errors.password = "กรุณากรอกรหัสผ่าน";
+  else if (
+    mode === "register" &&
+    (password.length < PASSWORD_MIN || password.length > PASSWORD_MAX)
+  )
+    errors.password = `ยาว ${PASSWORD_MIN}-${PASSWORD_MAX} ตัวอักษร`;
+
+  if (mode === "register" && !errors.password && confirm !== password)
+    errors.confirm = "รหัสผ่านไม่ตรงกัน";
+  return errors;
+}
+
+const GAME_FIELDS = { name: "game-name", min: "game-min", max: "game-max" };
+const CATEGORY_FIELDS = { name: "category-name" };
+const AUTH_FIELDS = {
+  username: "auth-username",
+  password: "auth-password",
+  confirm: "auth-confirm",
 };
 
 // ==========================================
-// Health
+// ข้อมูลที่หน้าเว็บจำไว้
+// ==========================================
+
+let games = []; // บอร์ดเกมในหน้าปัจจุบัน
+let categories = []; // หมวดหมู่ทั้งหมด
+let currentPage = 1;
+let editingId = null; // id ของเกมที่กำลังแก้ไข (null = โหมดเพิ่ม)
+let editingCategoryId = null; // id ของหมวดหมู่ที่กำลังแก้ไข (null = โหมดเพิ่ม)
+let dialogGame = null; // เกมที่เปิดหน้าต่างหมวดหมู่อยู่
+let authMode = "login"; // หน้าต่างเข้าสู่ระบบอยู่โหมดไหน: "login" หรือ "register"
+
+// ==========================================
+// การเข้าสู่ระบบ: เก็บ { token, user } ไว้ใน localStorage ให้รีเฟรชหน้าแล้วยังอยู่
+// ==========================================
+
+const SESSION_KEY = "boardgame-session";
+
+function loadStoredSession() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_KEY));
+  } catch {
+    return null;
+  }
+}
+
+let session = loadStoredSession(); // null = ยังไม่ได้เข้าสู่ระบบ
+
+function saveSession(value) {
+  session = value;
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(value));
+  } catch {
+    // เบราว์เซอร์ไม่ให้เก็บ (เช่นโหมดส่วนตัว) ก็ยังใช้ได้จนกว่าจะรีเฟรชหน้า
+  }
+  renderAuth();
+}
+
+function clearSession() {
+  session = null;
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {}
+  if (editingId !== null) resetGameForm();
+  if (editingCategoryId !== null) resetCategoryForm();
+  renderAuth();
+}
+
+// ลบบอร์ดเกม/หมวดหมู่ได้เฉพาะ admin (Gateway ตรวจซ้ำอีกชั้น ตอบ 403 ถ้าไม่ใช่)
+const isAdmin = () => session?.user.role === "admin";
+
+// สลับหน้าจอตามสถานะ: <body class="is-guest"> ซ่อนทุกอย่างที่มี class requires-auth (ดู style.css)
+// แล้ววาดรายการใหม่ ให้ปุ่มแก้ไข/ลบโผล่หรือหายตาม
+function renderAuth() {
+  document.body.classList.toggle("is-guest", !session);
+  $("user-name").innerHTML = session
+    ? `👤 ${escapeHtml(session.user.username)}${isAdmin() ? ' <span class="role-badge">admin</span>' : ""}`
+    : "";
+  $("category-hint").textContent = isAdmin()
+    ? " (กดชื่อเพื่อแก้ไข, กด ✕ เพื่อลบ)"
+    : " (กดชื่อเพื่อแก้ไข)";
+  renderGames();
+  renderCategories();
+  if ($("categories-dialog").open) loadGameCategories();
+}
+
+// ==========================================
+// GET /api/v1/health - สถานะระบบ
 // ==========================================
 
 async function loadHealth() {
   const pill = $("health-pill");
-  pill.className = "pill pill-muted";
-  pill.textContent = "กำลังตรวจสถานะ...";
-
   try {
-    const data = await api("/api/v1/health");
-    if (data.status === "ok") {
+    const result = await callApi("GET", "/api/v1/health");
+    if (result.status === "ok") {
       pill.className = "pill pill-ok";
       pill.textContent = "● ระบบพร้อมใช้งาน";
     } else {
       pill.className = "pill pill-warn";
-      pill.textContent = "● แจ้งเตือนใช้งานไม่ได้ชั่วคราว";
+      pill.textContent = "● บางบริการใช้งานไม่ได้";
     }
-  } catch (err) {
+  } catch {
     pill.className = "pill pill-error";
-    pill.textContent =
-      err.status === 503 ? "● ฐานข้อมูลไม่พร้อม" : "● เชื่อมต่อ API ไม่ได้";
+    pill.textContent = "● เชื่อมต่อระบบไม่ได้";
   }
 }
 
 // ==========================================
-// Categories
+// GET /api/v1/categories - หมวดหมู่ทั้งหมด
+// เก็บไว้ในตัวแปร categories ให้หน้าต่างหมวดหมู่ของเกมใช้ทำตัวเลือก "เพิ่ม"
 // ==========================================
 
 async function loadCategories() {
   try {
-    const { data } = await api("/api/v1/categories");
-    state.categories = data;
-    renderCategoryFilter();
+    const result = await callApi("GET", "/api/v1/categories");
+    categories = result.data;
+    renderCategories();
   } catch (err) {
     toast(`โหลดหมวดหมู่ไม่สำเร็จ: ${err.message}`, "error");
   }
 }
 
-function renderCategoryFilter() {
-  const select = $("filter-category");
-  const current = select.value;
-
-  select.replaceChildren(el("option", { value: "", text: "ทุกหมวดหมู่" }));
-  for (const c of state.categories) {
-    select.append(
-      el("option", { value: String(c.id), text: `${c.name} (${c.boardgameCount})` }),
-    );
+// รายการหมวดหมู่ทั้งหมด: กดชื่อเพื่อแก้ไข กด ✕ เพื่อลบ (✕ เฉพาะ admin / ยังไม่เข้าสู่ระบบ = แสดงชื่ออย่างเดียว)
+function renderCategories() {
+  $("categories-status").textContent =
+    categories.length === 0 ? "ยังไม่มีหมวดหมู่" : "";
+  if (!session) {
+    $("category-list").innerHTML = categories
+      .map((c) => `<li class="chip">${escapeHtml(c.name)}</li>`)
+      .join("");
+    return;
   }
-
-  // ถ้าหมวดที่เลือกไว้ยังอยู่ ให้คงค่าเดิม
-  select.value = state.categories.some((c) => String(c.id) === current)
-    ? current
-    : "";
+  $("category-list").innerHTML = categories
+    .map(
+      (
+        c,
+      ) => `<li class="chip ${c.id === editingCategoryId ? "is-editing" : ""}">
+        <button type="button" data-action="edit" data-id="${c.id}" aria-label="แก้ไขหมวดหมู่ ${escapeHtml(c.name)}">${escapeHtml(c.name)}</button>
+        ${isAdmin() ? `<button type="button" data-action="delete" data-id="${c.id}" aria-label="ลบหมวดหมู่ ${escapeHtml(c.name)}">✕</button>` : ""}</li>`,
+    )
+    .join("");
 }
 
 // ==========================================
-// Boardgames: list
+// ฟอร์มหมวดหมู่: ใช้ทั้งเพิ่ม (POST) และแก้ไข (PUT)
+// ==========================================
+
+async function submitCategoryForm(event) {
+  event.preventDefault();
+  const name = $("category-name").value.trim();
+  $("category-form-error").textContent = "";
+  if (!showFieldErrors(CATEGORY_FIELDS, validateCategory(name))) return;
+
+  try {
+    await withBusyButton($("category-submit"), "กำลังบันทึก...", () =>
+      editingCategoryId
+        ? updateCategory(editingCategoryId, name)
+        : addCategory(name),
+    );
+    resetCategoryForm();
+    loadCategories();
+  } catch (err) {
+    $("category-form-error").textContent = err.message;
+  }
+}
+
+// POST /api/v1/categories - เพิ่มหมวดหมู่
+async function addCategory(name) {
+  await callApi("POST", "/api/v1/categories", { name });
+  toast(`เพิ่มหมวดหมู่ "${name}" แล้ว`);
+}
+
+// PUT /api/v1/categories/:id - แก้ไขชื่อหมวดหมู่
+// โหลดรายการเกมใหม่ด้วย เพื่อให้ชื่อหมวดหมู่บนการ์ดเกมเปลี่ยนตาม
+async function updateCategory(id, name) {
+  await callApi("PUT", `/api/v1/categories/${id}`, { name });
+  toast(`แก้ไขหมวดหมู่เป็น "${name}" แล้ว`);
+  loadGames();
+}
+
+// กดชื่อหมวดหมู่: นำชื่อเดิมใส่ฟอร์ม แล้วเปลี่ยนเป็นโหมดแก้ไข
+function startEditCategory(id) {
+  const category = categories.find((c) => c.id === id);
+  editingCategoryId = id;
+  $("category-name").value = category.name;
+  $("category-form-title").textContent = `แก้ไขหมวดหมู่: ${category.name}`;
+  $("category-submit").textContent = "บันทึกการแก้ไข";
+  $("category-cancel").hidden = false;
+  $("category-form-error").textContent = "";
+  renderCategories();
+  $("category-name").focus();
+}
+
+function resetCategoryForm() {
+  editingCategoryId = null;
+  $("category-form").reset();
+  $("category-form-title").textContent = "เพิ่มหมวดหมู่";
+  $("category-submit").textContent = "เพิ่มหมวดหมู่";
+  $("category-cancel").hidden = true;
+  $("category-form-error").textContent = "";
+  showFieldErrors(CATEGORY_FIELDS, {});
+  renderCategories();
+}
+
+// ==========================================
+// DELETE /api/v1/categories/:id - ลบหมวดหมู่
+// เกมที่มีหมวดหมู่นี้จะถูกถอดออกตามอัตโนมัติ (ON DELETE CASCADE)
+// ==========================================
+
+async function deleteCategory(id) {
+  const category = categories.find((c) => c.id === id);
+  if (
+    !confirm(
+      `ลบหมวดหมู่ "${category.name}" ใช่หรือไม่?\nเกมที่อยู่ในหมวดหมู่นี้จะถูกถอดออกด้วย`,
+    )
+  )
+    return;
+
+  try {
+    await callApi("DELETE", `/api/v1/categories/${id}`);
+    toast(`ลบหมวดหมู่ "${category.name}" แล้ว`);
+    if (editingCategoryId === id) resetCategoryForm();
+    loadCategories();
+    loadGames();
+  } catch (err) {
+    toast(`ลบหมวดหมู่ไม่สำเร็จ: ${err.message}`, "error");
+  }
+}
+
+// ==========================================
+// GET /api/v1/boardgames - รายการบอร์ดเกม (เรียง + แบ่งหน้า)
 // ==========================================
 
 async function loadGames() {
   const status = $("games-status");
-  const list = $("games-list");
-  const categoryId = $("filter-category").value;
+  status.className = "status";
+  status.innerHTML = '<span class="spinner" aria-hidden="true"></span>กำลังโหลด...';
 
-  showLoading(status, "กำลังโหลดรายการบอร์ดเกม...");
-  list.replaceChildren();
+  // ค่าจากช่องเรียงลำดับเป็นรูปแบบ "sort:order" เช่น "name:asc"
+  const [sort, order] = $("sort-games").value.split(":");
+  const params = new URLSearchParams({
+    page: currentPage,
+    limit: $("page-size").value,
+    sort,
+    order,
+  });
 
   try {
-    const query = categoryId ? `?category_id=${categoryId}` : "";
-    const { data } = await api(`/api/v1/boardgames${query}`);
-    state.games = data;
-
-    if (data.length === 0) {
-      showInfo(
-        status,
-        categoryId
-          ? "ยังไม่มีบอร์ดเกมในหมวดหมู่นี้"
-          : "ยังไม่มีบอร์ดเกม เพิ่มเกมแรกได้จากฟอร์มด้านขวา",
-      );
-      return;
-    }
-
-    clearStatus(status);
+    const result = await callApi("GET", `/api/v1/boardgames?${params}`);
+    games = result.data;
+    renderPager(result.pagination);
     renderGames();
+    status.textContent = games.length === 0 ? "ยังไม่มีบอร์ดเกม" : "";
   } catch (err) {
-    showError(status, `โหลดรายการไม่สำเร็จ: ${err.message}`, loadGames);
+    status.className = "status is-error";
+    status.textContent = `โหลดรายการไม่สำเร็จ: ${err.message}`;
+    $("games-list").innerHTML = "";
   }
 }
 
 function renderGames() {
-  const filtered = Boolean($("filter-category").value);
+  let html = "";
+  for (const game of games) {
+    // API ส่งหมวดหมู่มาเป็นข้อความคั่นด้วย , เช่น "Strategy,Family"
+    const names = game.categories ? game.categories.split(",") : [];
+    const chips = names.length
+      ? names.map((n) => `<span class="chip">${escapeHtml(n)}</span>`).join("")
+      : '<span class="chip chip-muted">ยังไม่มีหมวดหมู่</span>';
 
-  const items = state.games.map((game) => {
-    const categoryNames = game.categories ? game.categories.split(",") : [];
+    html += `
+      <li class="game ${game.id === editingId ? "is-editing" : ""}">
+        <div>
+          <p class="game-name">${escapeHtml(game.name)}</p>
+          <p class="game-meta">ผู้เล่น ${game.minPlayers}–${game.maxPlayers} คน</p>
+          <div class="chips">${chips}</div>
+        </div>
+        <div class="game-actions">
+          <button type="button" class="btn btn-ghost btn-small" data-action="categories" data-id="${game.id}">หมวดหมู่</button>
+          ${
+            session
+              ? `<button type="button" class="btn btn-ghost btn-small" data-action="edit" data-id="${game.id}">แก้ไข</button>`
+              : ""
+          }
+          ${
+            isAdmin()
+              ? `<button type="button" class="btn btn-danger btn-small" data-action="delete" data-id="${game.id}">ลบ</button>`
+              : ""
+          }
+        </div>
+      </li>`;
+  }
+  $("games-list").innerHTML = html;
+}
 
-    const chips = el(
-      "div",
-      { class: "chips" },
-      categoryNames.length
-        ? categoryNames.map((name) => el("span", { class: "chip", text: name }))
-        : el("span", { class: "chip chip-muted", text: "ยังไม่มีหมวดหมู่" }),
-    );
-
-    const players =
-      game.minPlayers === game.maxPlayers
-        ? `${game.minPlayers} คน`
-        : `${game.minPlayers}–${game.maxPlayers} คน`;
-
-    return el(
-      "li",
-      { class: `game${state.editingId === game.id ? " is-editing" : ""}` },
-      [
-        el("div", {}, [
-          el("p", { class: "game-name", text: game.name }),
-          el("p", {
-            class: "game-meta",
-            text: `ผู้เล่น ${players}${filtered ? " · แสดงเฉพาะหมวดที่กรอง" : ""}`,
-          }),
-          chips,
-        ]),
-        el("div", { class: "game-actions" }, [
-          el("button", {
-            type: "button",
-            class: "btn btn-ghost btn-small",
-            text: "หมวดหมู่",
-            onclick: () => openCategoriesDialog(game),
-          }),
-          el("button", {
-            type: "button",
-            class: "btn btn-ghost btn-small",
-            text: "แก้ไข",
-            onclick: () => startEdit(game),
-          }),
-          el("button", {
-            type: "button",
-            class: "btn btn-danger btn-small",
-            text: "ลบ",
-            onclick: (event) => deleteGame(game, event.currentTarget),
-          }),
-        ]),
-      ],
-    );
-  });
-
-  $("games-list").replaceChildren(...items);
+function renderPager(pagination) {
+  const { page, totalPages, total } = pagination;
+  $("games-pager").hidden = total === 0;
+  $("page-info").textContent =
+    `หน้า ${page} / ${totalPages} · ทั้งหมด ${total} เกม`;
+  $("page-prev").disabled = page <= 1;
+  $("page-next").disabled = page >= totalPages;
 }
 
 // ==========================================
-// Boardgames: form (เพิ่ม / แก้ไข)
+// ฟอร์มบอร์ดเกม: ใช้ฟอร์มเดียวทั้ง "เพิ่ม" และ "แก้ไข"
+// editingId = null -> addGame() (POST) / มีค่า -> updateGame() (PUT)
 // ==========================================
 
-function setFieldError(inputId, message) {
-  const input = $(inputId);
-  $(`${inputId}-error`).textContent = message || "";
-  if (message) input.setAttribute("aria-invalid", "true");
-  else input.removeAttribute("aria-invalid");
-}
+// ช่องว่างแปลงเป็น NaN (Number("") ได้ 0 ซึ่งจะผ่านเป็นตัวเลขโดยไม่ตั้งใจ)
+const toNumber = (value) => (value.trim() === "" ? NaN : Number(value));
 
-// ตรวจข้อมูลฝั่ง Frontend ก่อนส่ง (กฎเดียวกับ API) คืนค่า body หรือ null ถ้าไม่ผ่าน
-function validateGameForm() {
-  const name = $("game-name").value.trim();
-  const minRaw = $("game-min").value.trim();
-  const maxRaw = $("game-max").value.trim();
-  const min = Number(minRaw);
-  const max = Number(maxRaw);
-  let valid = true;
-
-  setFieldError("game-name", "");
-  setFieldError("game-min", "");
-  setFieldError("game-max", "");
-
-  if (!name) {
-    setFieldError("game-name", "กรุณากรอกชื่อบอร์ดเกม");
-    valid = false;
-  } else if (name.length > NAME_MAX_LENGTH) {
-    setFieldError("game-name", `ชื่อยาวได้ไม่เกิน ${NAME_MAX_LENGTH} ตัวอักษร`);
-    valid = false;
-  }
-
-  if (!minRaw) {
-    setFieldError("game-min", "กรุณากรอกจำนวน");
-    valid = false;
-  } else if (!Number.isInteger(min) || min < 1) {
-    setFieldError("game-min", "ต้องเป็นจำนวนเต็มตั้งแต่ 1");
-    valid = false;
-  }
-
-  if (!maxRaw) {
-    setFieldError("game-max", "กรุณากรอกจำนวน");
-    valid = false;
-  } else if (!Number.isInteger(max) || max < 1 || max > MAX_PLAYERS) {
-    setFieldError("game-max", "ต้องเป็นจำนวนเต็มตั้งแต่ 1");
-    valid = false;
-  } else if (Number.isInteger(min) && max < min) {
-    setFieldError("game-max", "ต้องมากกว่าหรือเท่ากับผู้เล่นขั้นต่ำ");
-    valid = false;
-  }
-
-  return valid ? { name, minPlayers: min, maxPlayers: max } : null;
+function readGameForm() {
+  return {
+    name: $("game-name").value.trim(),
+    minPlayers: toNumber($("game-min").value),
+    maxPlayers: toNumber($("game-max").value),
+  };
 }
 
 async function submitGameForm(event) {
   event.preventDefault();
   $("game-form-error").textContent = "";
+  const body = readGameForm();
 
-  const body = validateGameForm();
-  if (!body) return;
+  // ตรวจฝั่ง Frontend ก่อน ไม่ผ่านก็ไม่ต้องส่งไป API
+  if (!showFieldErrors(GAME_FIELDS, validateGame(body))) return;
 
-  const button = $("game-submit");
-  const editing = state.editingId !== null;
-
-  await withBusyButton(button, "กำลังบันทึก...", async () => {
-    try {
-      if (editing) {
-        await api(`/api/v1/boardgames/${state.editingId}`, {
-          method: "PUT",
-          body,
-        });
-        toast(`แก้ไข "${body.name}" แล้ว`);
-      } else {
-        const result = await api("/api/v1/boardgames", { method: "POST", body });
-        // แสดงผลการแจ้งเตือนจาก notification-service (sent หรือ fallback)
-        if (result.notification?.sent) {
-          toast(`เพิ่ม "${body.name}" แล้ว และแจ้งเตือนไปที่ Discord`);
-        } else {
-          toast(
-            `เพิ่ม "${body.name}" แล้ว แต่ส่งแจ้งเตือนไม่สำเร็จ (ข้อมูลถูกบันทึกแล้ว)`,
-            "warn",
-          );
-        }
-        loadNotifications();
-      }
-
-      resetGameForm();
-      loadGames();
-    } catch (err) {
-      $("game-form-error").textContent = err.message;
-    }
-  });
+  try {
+    await withBusyButton($("game-submit"), "กำลังบันทึก...", () =>
+      editingId === null ? addGame(body) : updateGame(editingId, body),
+    );
+    resetGameForm();
+    loadGames();
+  } catch (err) {
+    // error ที่ Frontend ตรวจไม่ได้ เช่น ชื่อซ้ำ (409) หรือ service ล่ม (503) แสดงข้อความจาก API
+    $("game-form-error").textContent = err.message;
+  }
 }
 
-function startEdit(game) {
-  state.editingId = game.id;
-  $("game-form-title").textContent = `แก้ไข: ${game.name}`;
-  $("game-submit").textContent = "บันทึกการแก้ไข";
-  $("game-cancel").hidden = false;
+// POST /api/v1/boardgames - เพิ่มบอร์ดเกม (boardgame-service จะเรียก notification-service ต่อ)
+async function addGame(body) {
+  const result = await callApi("POST", "/api/v1/boardgames", body);
+  if (result.notification?.sent) {
+    toast(`เพิ่ม "${body.name}" แล้ว และแจ้งเตือนไปที่ Discord`);
+  } else {
+    toast(`เพิ่ม "${body.name}" แล้ว แต่ส่งแจ้งเตือนไม่สำเร็จ`, "warn");
+  }
+  loadNotifications();
+}
+
+// PUT /api/v1/boardgames/:id - แก้ไขบอร์ดเกม
+async function updateGame(id, body) {
+  await callApi("PUT", `/api/v1/boardgames/${id}`, body);
+  toast(`แก้ไข "${body.name}" แล้ว`);
+}
+
+// กดปุ่ม "แก้ไข": นำข้อมูลเกมใส่ฟอร์ม แล้วเปลี่ยนเป็นโหมดแก้ไข
+function startEdit(id) {
+  const game = games.find((g) => g.id === id);
+  editingId = id;
   $("game-name").value = game.name;
   $("game-min").value = game.minPlayers;
   $("game-max").value = game.maxPlayers;
-  $("game-form-error").textContent = "";
+  $("game-form-title").textContent = `แก้ไข: ${game.name}`;
+  $("game-submit").textContent = "บันทึกการแก้ไข";
+  $("game-cancel").hidden = false;
   renderGames();
   $("game-name").focus();
 }
 
 function resetGameForm() {
-  state.editingId = null;
+  editingId = null;
   $("game-form").reset();
   $("game-form-title").textContent = "เพิ่มบอร์ดเกม";
   $("game-submit").textContent = "เพิ่มบอร์ดเกม";
   $("game-cancel").hidden = true;
   $("game-form-error").textContent = "";
-  ["game-name", "game-min", "game-max"].forEach((id) => setFieldError(id, ""));
-  if (state.games.length) renderGames();
-}
-
-async function deleteGame(game, button) {
-  if (!confirm(`ลบ "${game.name}" ใช่หรือไม่?\nความสัมพันธ์กับหมวดหมู่จะถูกลบไปด้วย`)) {
-    return;
-  }
-
-  await withBusyButton(button, "กำลังลบ...", async () => {
-    try {
-      await api(`/api/v1/boardgames/${game.id}`, { method: "DELETE" });
-      toast(`ลบ "${game.name}" แล้ว`);
-      if (state.editingId === game.id) resetGameForm();
-      loadGames();
-      loadCategories();
-    } catch (err) {
-      toast(`ลบไม่สำเร็จ: ${err.message}`, "error");
-    }
-  });
+  showFieldErrors(GAME_FIELDS, {});
+  renderGames();
 }
 
 // ==========================================
-// Categories: form
+// DELETE /api/v1/boardgames/:id - ลบบอร์ดเกม
 // ==========================================
 
-async function submitCategoryForm(event) {
-  event.preventDefault();
-  $("category-form-error").textContent = "";
-  setFieldError("category-name", "");
-
-  const name = $("category-name").value.trim();
-
-  if (!name) {
-    setFieldError("category-name", "กรุณากรอกชื่อหมวดหมู่");
-    return;
-  }
-  if (name.length > NAME_MAX_LENGTH) {
-    setFieldError("category-name", `ชื่อยาวได้ไม่เกิน ${NAME_MAX_LENGTH} ตัวอักษร`);
-    return;
-  }
-
-  await withBusyButton($("category-submit"), "กำลังบันทึก...", async () => {
-    try {
-      await api("/api/v1/categories", { method: "POST", body: { name } });
-      toast(`เพิ่มหมวดหมู่ "${name}" แล้ว`);
-      $("category-form").reset();
-      loadCategories();
-    } catch (err) {
-      $("category-form-error").textContent = err.message;
-    }
-  });
-}
-
-// ==========================================
-// Dialog: จัดการหมวดหมู่ของเกม
-// ==========================================
-
-async function openCategoriesDialog(game) {
-  state.dialogGame = game;
-  $("dialog-title").textContent = `หมวดหมู่ของ ${game.name}`;
-  $("link-form-error").textContent = "";
-  $("categories-dialog").showModal();
-  await loadDialogCategories();
-}
-
-async function loadDialogCategories() {
-  const game = state.dialogGame;
-  const status = $("dialog-status");
-  const list = $("dialog-list");
-  const select = $("link-category");
-
-  showLoading(status, "กำลังโหลด...");
-  list.replaceChildren();
-  select.replaceChildren();
-  $("link-submit").disabled = true;
+async function deleteGame(id) {
+  const game = games.find((g) => g.id === id);
+  if (!confirm(`ลบ "${game.name}" ใช่หรือไม่?`)) return;
 
   try {
-    const { data: linked } = await api(`/api/v1/boardgames/${game.id}/categories`);
-    clearStatus(status);
-
-    if (linked.length === 0) {
-      showInfo(status, "เกมนี้ยังไม่มีหมวดหมู่");
-    }
-
-    list.replaceChildren(
-      ...linked.map((c) =>
-        el("li", { class: "chip" }, [
-          c.name,
-          el("button", {
-            type: "button",
-            text: "✕",
-            "aria-label": `ถอดหมวดหมู่ ${c.name}`,
-            onclick: () => unlinkCategory(c),
-          }),
-        ]),
-      ),
-    );
-
-    // ตัวเลือกที่เพิ่มได้ = หมวดหมู่ทั้งหมดที่เกมนี้ยังไม่มี
-    const linkedIds = new Set(linked.map((c) => c.id));
-    const available = state.categories.filter((c) => !linkedIds.has(c.id));
-
-    if (available.length === 0) {
-      select.append(el("option", { value: "", text: "ไม่มีหมวดหมู่ให้เพิ่มแล้ว" }));
-    } else {
-      available.forEach((c) =>
-        select.append(el("option", { value: String(c.id), text: c.name })),
-      );
-      $("link-submit").disabled = false;
-    }
+    await callApi("DELETE", `/api/v1/boardgames/${id}`);
+    toast(`ลบ "${game.name}" แล้ว`);
+    if (editingId === id) resetGameForm();
+    loadGames();
   } catch (err) {
-    showError(status, err.message, loadDialogCategories);
+    toast(`ลบไม่สำเร็จ: ${err.message}`, "error");
   }
 }
 
+// ==========================================
+// หน้าต่างจัดการหมวดหมู่ของเกม (ความสัมพันธ์ Many-to-Many)
+// ==========================================
+
+function openCategoriesDialog(id) {
+  dialogGame = games.find((g) => g.id === id);
+  $("dialog-title").textContent = `หมวดหมู่ของ ${dialogGame.name}`;
+  $("link-form-error").textContent = "";
+  $("categories-dialog").showModal();
+  loadGameCategories();
+}
+
+// GET /api/v1/boardgames/:id/categories - หมวดหมู่ที่เกมนี้มีอยู่
+async function loadGameCategories() {
+  try {
+    const result = await callApi(
+      "GET",
+      `/api/v1/boardgames/${dialogGame.id}/categories`,
+    );
+    const linked = result.data;
+
+    // หมวดหมู่ที่เกมมีแล้ว พร้อมปุ่ม ✕ สำหรับถอดออก
+    $("dialog-status").textContent =
+      linked.length === 0 ? "เกมนี้ยังไม่มีหมวดหมู่" : "";
+    // ปุ่ม ✕ มีเฉพาะตอนเข้าสู่ระบบ
+    $("dialog-list").innerHTML = linked
+      .map(
+        (c) => `<li class="chip">${escapeHtml(c.name)}${
+          session
+            ? `<button type="button" data-id="${c.id}" aria-label="ถอดหมวดหมู่">✕</button>`
+            : ""
+        }</li>`,
+      )
+      .join("");
+
+    // ตัวเลือกที่เพิ่มได้ = หมวดหมู่ทั้งหมดที่เกมนี้ยังไม่มี
+    const linkedIds = linked.map((c) => c.id);
+    const available = categories.filter((c) => !linkedIds.includes(c.id));
+    $("link-category").innerHTML = available
+      .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
+      .join("");
+    $("link-submit").disabled = available.length === 0;
+  } catch (err) {
+    $("dialog-status").textContent = err.message;
+  }
+}
+
+// POST /api/v1/boardgames/:id/categories - ผูกหมวดหมู่เข้ากับเกม
 async function linkCategory(event) {
   event.preventDefault();
   $("link-form-error").textContent = "";
-
   const categoryId = Number($("link-category").value);
-  if (!Number.isInteger(categoryId) || categoryId < 1) {
-    $("link-form-error").textContent = "กรุณาเลือกหมวดหมู่";
-    return;
-  }
 
-  await withBusyButton($("link-submit"), "...", async () => {
-    try {
-      await api(`/api/v1/boardgames/${state.dialogGame.id}/categories`, {
-        method: "POST",
-        body: { category_id: categoryId },
-      });
-      await loadDialogCategories();
-      loadGames();
-      loadCategories();
-    } catch (err) {
-      $("link-form-error").textContent = err.message;
-    }
-  });
+  try {
+    await callApi("POST", `/api/v1/boardgames/${dialogGame.id}/categories`, {
+      category_id: categoryId,
+    });
+    loadGameCategories();
+    loadGames();
+  } catch (err) {
+    $("link-form-error").textContent = err.message;
+  }
 }
 
-async function unlinkCategory(category) {
+// DELETE /api/v1/boardgames/:id/categories/:categoryId - ถอดหมวดหมู่ออกจากเกม
+async function unlinkCategory(categoryId) {
   $("link-form-error").textContent = "";
   try {
-    await api(
-      `/api/v1/boardgames/${state.dialogGame.id}/categories/${category.id}`,
-      { method: "DELETE" },
+    await callApi(
+      "DELETE",
+      `/api/v1/boardgames/${dialogGame.id}/categories/${categoryId}`,
     );
-    await loadDialogCategories();
+    loadGameCategories();
     loadGames();
-    loadCategories();
   } catch (err) {
     $("link-form-error").textContent = err.message;
   }
 }
 
 // ==========================================
-// Notifications (จาก notification-service)
+// หน้าต่างเข้าสู่ระบบ / สมัครสมาชิก (auth-service ผ่าน Gateway)
 // ==========================================
 
-const NOTIF_LABELS = {
-  sent: { text: "ส่งแล้ว", class: "pill-ok" },
-  skipped: { text: "ข้าม", class: "pill-muted" },
-  failed: { text: "ล้มเหลว", class: "pill-error" },
-};
+function openAuthDialog(mode) {
+  setAuthMode(mode);
+  $("auth-form").reset();
+  showFieldErrors(AUTH_FIELDS, {});
+  $("auth-form-error").textContent = "";
+  if (!$("auth-dialog").open) $("auth-dialog").showModal();
+  $("auth-username").focus();
+}
 
-async function loadNotifications() {
-  const status = $("notifs-status");
-  const list = $("notifs-list");
+function setAuthMode(mode) {
+  authMode = mode;
+  const register = mode === "register";
+  $("auth-title").textContent = register ? "สมัครสมาชิก" : "เข้าสู่ระบบ";
+  $("auth-submit").textContent = register ? "สมัครสมาชิก" : "เข้าสู่ระบบ";
+  $("auth-confirm-field").hidden = !register;
+  $("auth-password").autocomplete = register ? "new-password" : "current-password";
+  $("auth-switch-text").textContent = register ? "มีบัญชีแล้ว?" : "ยังไม่มีบัญชี?";
+  $("auth-switch").textContent = register ? "เข้าสู่ระบบ" : "สมัครสมาชิก";
+  showFieldErrors(AUTH_FIELDS, {});
+  $("auth-form-error").textContent = "";
+}
 
-  showLoading(status, "กำลังโหลด...");
+async function submitAuthForm(event) {
+  event.preventDefault();
+  $("auth-form-error").textContent = "";
+  const values = {
+    username: $("auth-username").value.trim(),
+    password: $("auth-password").value,
+    confirm: $("auth-confirm").value,
+  };
+
+  // ตรวจฝั่ง Frontend ก่อน ไม่ผ่านก็ไม่ต้องส่งไป API
+  if (!showFieldErrors(AUTH_FIELDS, validateAuth(values, authMode))) return;
 
   try {
-    const { data } = await api("/api/v1/notifications");
-
-    if (data.length === 0) {
-      list.replaceChildren();
-      showInfo(status, "ยังไม่มีการแจ้งเตือน ลองเพิ่มบอร์ดเกมดู");
-      return;
-    }
-
-    clearStatus(status);
-    list.replaceChildren(
-      ...data.map((n) => {
-        const label = NOTIF_LABELS[n.status] || NOTIF_LABELS.skipped;
-        return el("li", { class: "notif" }, [
-          el("p", {}, [
-            el("span", { class: `badge ${label.class}`, text: label.text }),
-            n.message,
-          ]),
-          n.error ? el("p", { class: "notif-time", text: n.error }) : null,
-          el("p", {
-            class: "notif-time",
-            text: new Date(n.createdAt).toLocaleString("th-TH"),
-          }),
-        ]);
-      }),
-    );
+    await withBusyButton($("auth-submit"), "กำลังดำเนินการ...", async () => {
+      if (authMode === "register") await register(values.username, values.password);
+      await login(values.username, values.password);
+    });
+    $("auth-dialog").close();
   } catch (err) {
-    list.replaceChildren();
-    showError(status, err.message, loadNotifications);
+    // เช่น ชื่อหรือรหัสผิด (401), ชื่อถูกใช้แล้ว (409), auth-service ล่ม (503)
+    $("auth-form-error").textContent = err.message;
+  }
+}
+
+// POST /api/v1/auth/register - สมัครสมาชิก (สำเร็จแล้วเข้าสู่ระบบต่อให้ทันที)
+async function register(username, password) {
+  await callApi("POST", "/api/v1/auth/register", { username, password });
+  toast(`สมัครสมาชิก "${username}" แล้ว`);
+}
+
+// POST /api/v1/auth/login - เข้าสู่ระบบ ได้ token กลับมาเก็บไว้แนบกับคำขอเพิ่ม/แก้ไข/ลบ
+async function login(username, password) {
+  const result = await callApi("POST", "/api/v1/auth/login", { username, password });
+  saveSession({ token: result.data.token, user: result.data.user });
+  toast(`ยินดีต้อนรับ ${result.data.user.username}`);
+}
+
+function logout() {
+  clearSession();
+  toast("ออกจากระบบแล้ว");
+}
+
+// GET /api/v1/auth/me - เปิดหน้ามาแล้วมี token เดิม: ตรวจว่ายังใช้ได้ (หมดอายุ -> callApi ออกจากระบบให้)
+async function restoreSession() {
+  if (!session) return;
+  try {
+    const result = await callApi("GET", "/api/v1/auth/me");
+    // role ใช้ของเดิมใน token (Gateway ตรวจสิทธิ์จาก token) ถ้าเพิ่งถูกเลื่อนเป็น admin ต้องเข้าสู่ระบบใหม่
+    saveSession({ ...session, user: { ...result.data, role: session.user.role } });
+  } catch {
+    // 401 ถูกจัดการใน callApi แล้ว / auth-service ล่ม: ใช้ข้อมูลเดิมไปก่อน (Gateway ยังตรวจ token เองได้)
   }
 }
 
 // ==========================================
-// Start
+// GET /api/v1/notifications - ประวัติการแจ้งเตือน (notification-service)
+// ถ้า notification-service ล่ม Gateway ตอบ 503 ส่วนอื่นของหน้าเว็บยังใช้ได้ตามปกติ
+// ==========================================
+
+const NOTIFICATION_LABELS = {
+  sent: ["ส่งแล้ว", "chip-ok"],
+  failed: ["ส่งไม่สำเร็จ", "chip-error"],
+  skipped: ["ข้าม (ไม่ได้ตั้งค่า)", "chip-muted"],
+};
+
+async function loadNotifications() {
+  const status = $("notifications-status");
+  status.className = "status";
+  status.innerHTML = '<span class="spinner" aria-hidden="true"></span>กำลังโหลด...';
+
+  try {
+    const result = await callApi("GET", "/api/v1/notifications");
+    const items = result.data.slice(0, 5);
+    status.textContent = items.length === 0 ? "ยังไม่มีการแจ้งเตือน" : "";
+    $("notification-list").innerHTML = items
+      .map((n) => {
+        const [label, cls] = NOTIFICATION_LABELS[n.status] || [n.status, ""];
+        const time = new Date(n.createdAt).toLocaleTimeString("th-TH");
+        return `<li class="notification">
+          <span class="chip ${cls}">${escapeHtml(label)}</span>
+          <span class="notification-text">${escapeHtml(n.message)}</span>
+          <time class="notification-time">${time}</time></li>`;
+      })
+      .join("");
+  } catch (err) {
+    status.className = "status is-error";
+    status.textContent = `โหลดการแจ้งเตือนไม่สำเร็จ: ${err.message}`;
+    $("notification-list").innerHTML = "";
+  }
+}
+
+// ==========================================
+// ผูกปุ่มกับฟังก์ชัน แล้วโหลดข้อมูลครั้งแรก
 // ==========================================
 
 $("game-form").addEventListener("submit", submitGameForm);
 $("game-cancel").addEventListener("click", resetGameForm);
 $("category-form").addEventListener("submit", submitCategoryForm);
+$("category-cancel").addEventListener("click", resetCategoryForm);
 $("link-form").addEventListener("submit", linkCategory);
-$("filter-category").addEventListener("change", loadGames);
-$("refresh-games").addEventListener("click", () => {
-  loadCategories();
+$("dialog-close").addEventListener("click", () =>
+  $("categories-dialog").close(),
+);
+// ปุ่มในรายการบอร์ดเกมถูกสร้างใหม่ทุกครั้งที่โหลด จึงดักคลิกที่ <ul> ตัวเดียว แล้วดูว่ากดปุ่มไหน
+// (Helmet ของ Gateway ไม่อนุญาต onclick="..." ใน HTML)
+$("games-list").addEventListener("click", (event) => {
+  const { action, id } = event.target.dataset;
+  if (action === "categories") openCategoriesDialog(Number(id));
+  if (action === "edit") startEdit(Number(id));
+  if (action === "delete") deleteGame(Number(id));
+});
+$("category-list").addEventListener("click", (event) => {
+  const { action, id } = event.target.dataset;
+  if (action === "edit") startEditCategory(Number(id));
+  if (action === "delete") deleteCategory(Number(id));
+});
+$("dialog-list").addEventListener("click", (event) => {
+  if (event.target.dataset.id) unlinkCategory(Number(event.target.dataset.id));
+});
+$("health-pill").addEventListener("click", loadHealth);
+$("notifications-refresh").addEventListener("click", loadNotifications);
+$("auth-form").addEventListener("submit", submitAuthForm);
+$("auth-switch").addEventListener("click", () =>
+  setAuthMode(authMode === "login" ? "register" : "login"),
+);
+$("auth-close").addEventListener("click", () => $("auth-dialog").close());
+$("login-open").addEventListener("click", () => openAuthDialog("login"));
+$("guest-login").addEventListener("click", () => openAuthDialog("login"));
+$("guest-register").addEventListener("click", () => openAuthDialog("register"));
+$("logout").addEventListener("click", logout);
+
+// เปลี่ยนการเรียง / จำนวนต่อหน้า = กลับไปหน้า 1 แล้วโหลดใหม่
+for (const id of ["sort-games", "page-size"]) {
+  $(id).addEventListener("change", () => {
+    currentPage = 1;
+    loadGames();
+  });
+}
+$("page-prev").addEventListener("click", () => {
+  currentPage--;
   loadGames();
 });
-$("refresh-notifs").addEventListener("click", loadNotifications);
-$("health-pill").addEventListener("click", loadHealth);
-$("dialog-close").addEventListener("click", () => $("categories-dialog").close());
+$("page-next").addEventListener("click", () => {
+  currentPage++;
+  loadGames();
+});
 
+renderAuth();
+restoreSession();
 loadHealth();
 loadCategories();
 loadGames();

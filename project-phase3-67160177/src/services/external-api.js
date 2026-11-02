@@ -2,8 +2,9 @@
 // External API Service
 // เรียก service ภายนอกอย่างทนทานต่อความผิดพลาด: Timeout + Retry + Fallback
 //
-// ระยะที่ 3: API หลักไม่เรียก Discord เองแล้ว แต่เรียก notification-service
-// (microservice แยก) ผ่าน HTTP แล้ว notification-service จะส่งต่อไปที่ Discord
+// ระยะที่ 3: boardgame-service ไม่เรียก Discord เองแล้ว แต่เรียก notification-service
+// (microservice แยก พอร์ต 4002) ผ่าน HTTP โดยตรง (service-to-service ไม่ผ่าน Gateway)
+// แล้ว notification-service จะส่งต่อไปที่ Discord
 // ==========================================
 
 // อ่านค่าตั้งต้นจาก env (ปรับได้โดยไม่ต้องแก้โค้ด เช่น ใช้ตอนทดสอบ failure scenario)
@@ -21,7 +22,7 @@ const readConfig = () => ({
 });
 
 const notificationServiceUrl = () =>
-  process.env.NOTIFICATION_SERVICE_URL || "http://localhost:3001";
+  process.env.NOTIFICATION_SERVICE_URL || "http://localhost:4002";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -68,6 +69,7 @@ async function fetchWithRetry(url, options = {}, config = {}) {
     let retryable = true;
 
     try {
+      // AbortSignal.timeout: ยกเลิกคำขอเองเมื่อครบเวลา fetch จะ throw TimeoutError (จับใน catch ด้านล่าง)
       const response = await fetch(url, {
         ...options,
         signal: AbortSignal.timeout(timeoutMs),
@@ -149,33 +151,4 @@ async function notifyBoardgameCreated(game) {
   }
 }
 
-/**
- * ดึงประวัติการแจ้งเตือนจาก notification-service (ใช้ใน GET /api/v1/notifications)
- * มี timeout แต่ไม่ retry เพราะผู้ใช้กดโหลดใหม่เองได้
- */
-async function fetchNotifications() {
-  return fetchWithRetry(
-    `${notificationServiceUrl()}/notifications`,
-    {},
-    { maxRetries: 0 },
-  );
-}
-
-/**
- * ตรวจสถานะ notification-service (ใช้ใน GET /api/v1/health)
- */
-async function checkNotificationService() {
-  const result = await fetchWithRetry(
-    `${notificationServiceUrl()}/health`,
-    {},
-    { maxRetries: 0, timeoutMs: 1000 },
-  );
-  return result.ok;
-}
-
-module.exports = {
-  fetchWithRetry,
-  notifyBoardgameCreated,
-  fetchNotifications,
-  checkNotificationService,
-};
+module.exports = { fetchWithRetry, notifyBoardgameCreated };

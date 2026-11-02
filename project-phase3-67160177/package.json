@@ -1,14 +1,20 @@
 {
   "name": "project-phase3-67160177",
   "version": "3.0.0",
-  "description": "Board Game Management System - Phase 3 (API + Notification Microservice + Frontend)",
-  "main": "src/index.js",
+  "description": "Board Game Management System - Phase 3 (API Gateway + Microservices + Auth + Frontend)",
+  "main": "gateway/index.js",
   "scripts": {
     "start": "node scripts/start-all.js",
     "dev": "node scripts/start-all.js --watch",
-    "start:api": "node src/index.js",
+    "start:gateway": "node gateway/index.js",
+    "start:boardgame": "node src/index.js",
     "start:notification": "node services/notification-service/index.js",
+    "start:auth": "node services/auth-service/index.js",
     "mock:external": "node scripts/mock-external.js",
+    "migrate": "node scripts/migrate.js up",
+    "migrate:status": "node scripts/migrate.js status",
+    "migrate:down": "node scripts/migrate.js down",
+    "create-admin": "node scripts/create-admin.js",
     "test": "jest",
     "test:coverage": "jest --coverage"
   },
@@ -18,13 +24,18 @@
   "type": "commonjs",
   "jest": {
     "testEnvironment": "node",
+    "setupFiles": [
+      "<rootDir>/tests/setup-env.js"
+    ],
     "testMatch": [
       "<rootDir>/tests/**/*.test.js"
     ],
     "collectCoverageFrom": [
+      "gateway/**/*.js",
       "src/**/*.js",
       "services/**/*.js",
-      "db.js"
+      "db.js",
+      "scripts/create-admin.js"
     ],
     "coverageReporters": [
       "text",
@@ -33,11 +44,14 @@
     ]
   },
   "dependencies": {
+    "axios": "^1.21.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
     "helmet": "^8.3.0",
     "js-yaml": "^4.1.0",
+    "jsonwebtoken": "^9.0.3",
     "morgan": "^1.11.0",
     "mysql2": "^3.24.1",
     "swagger-ui-express": "^5.0.1"

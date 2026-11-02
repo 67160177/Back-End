@@ -1,23 +1,95 @@
 # ผลการทดสอบ Failure Scenario ของการเชื่อมต่อ Service ภายนอก
 
-## ระยะที่ 3: สถาปัตยกรรมแบบ Microservice
+เอกสารนี้มี 3 ส่วน
+
+- **ส่วน A** บริการย่อยล่ม/ค้าง เมื่อเรียกผ่าน **API Gateway** (ระยะที่ 3, เทียบจุดตรวจสอบที่ 3 ของปฏิบัติการสัปดาห์ที่ 13)
+- **ส่วน B** การเรียก API ภายนอก (Discord) จาก boardgame-service → notification-service (ระยะที่ 3)
+- **ภาคผนวก** ผลการทดสอบระยะที่ 2 (ก่อนแยก service)
+
+## ส่วน A: บริการย่อยล่มหรือค้าง เมื่อเรียกผ่าน API Gateway
+
+ทดสอบซ้ำเมื่อ 1 พฤศจิกายน 2569 (2026-11-01) กับระบบปัจจุบัน (Gateway + boardgame-service + notification-service) บน MySQL 8 จริง โดยรันชุด service แยก (พอร์ต 3100/4101/4102) กับฐานข้อมูลชั่วคราวที่สร้างด้วย `npm run migrate` แล้ว **หยุด service ทีละตัว** และเรียกผ่าน Gateway
+
+| #   | สถานการณ์ | คำขอผ่าน Gateway | ผลลัพธ์ | เวลา | `GET /api/v1/health` |
+| --- | --- | --- | --- | --- | --- |
+| G0  | ปกติ | `GET /api/v1/health` | 200 | 0.151 s | `ok` |
+|     |  | `POST /api/v1/boardgames` | 201, `notification.attempts=1` | 0.073 s | |
+| G1  | notification-service ปิด | `GET /api/v1/notifications` | **503** `SERVICE_UNAVAILABLE` | 0.004 s | 200 `degraded` |
+|     |  | `GET /api/v1/boardgames/1` | 200 (ดูข้อมูลได้ปกติ) | 0.007 s | |
+|     |  | `POST /api/v1/boardgames` | **201** + `notification.sent=false, attempts=3` (retry 500 + 1000 ms) | 1.528 s | |
+| G2  | boardgame-service ปิด | `GET /api/v1/boardgames` | **503** `SERVICE_UNAVAILABLE` | 0.003 s | **503** `down` |
+|     |  | `POST /api/v1/categories` | 503 (Gateway ไม่ crash) | 0.004 s | |
+|     |  | `GET /api/v1/notifications` | 200 (บริการอื่นไม่กระทบ) | 0.009 s | |
+|     | เปิด boardgame-service กลับมา | `GET /api/v1/boardgames/1` | 200 ทันที ไม่ต้องรีสตาร์ท Gateway | 0.043 s | |
+| G3  | boardgame-service ค้าง (mock `slow` หน่วง 10 วินาที) | `GET /api/v1/boardgames` | **504** `GATEWAY_TIMEOUT` | 10.049 s | |
+| G4  | Discord Webhook ชี้ไป URL ที่ไม่มีอยู่จริง | `POST /api/v1/boardgames` | **201** + `notification.sent=false, attempts=3` | 1.683 s | |
+|     |  | `GET /api/v1/notifications` | 200 รายการล่าสุด `status: "failed"`, `error: "เชื่อมต่อ Discord ไม่ได้ (ECONNREFUSED)"` | 0.005 s | |
+
+ตัวอย่าง response
+
+```
+G1  POST /api/v1/boardgames
+201 {"message":"เพิ่มบอร์ดเกมสำเร็จ","data":{"id":2,"name":"Azul","minPlayers":2,"maxPlayers":4},
+     "notification":{"sent":false,"attempts":3,"message":"เพิ่มบอร์ดเกมสำเร็จ แต่ส่งแจ้งเตือนไปที่ Discord ไม่สำเร็จ"}}
+
+G2  GET /api/v1/boardgames
+503 {"error":{"code":"SERVICE_UNAVAILABLE","message":"boardgame-service ไม่พร้อมใช้งานในขณะนี้"}}
+
+G2  GET /api/v1/health
+503 {"status":"down","services":{"gateway":"up","boardgameService":"down","database":"unknown","notificationService":"up"}}
+
+G3  GET /api/v1/boardgames
+504 {"error":{"code":"GATEWAY_TIMEOUT","message":"boardgame-service ไม่ตอบภายในเวลาที่กำหนด กรุณาลองใหม่"}}
+```
+
+log จริง
+
+```
+[gateway] notification-service ไม่พร้อมใช้งาน (ECONNREFUSED)
+[external-api] localhost:4102 ล้มเหลวครั้งที่ 1/3: ECONNREFUSED
+[external-api] รอ 500 ms แล้วลองใหม่
+[external-api] localhost:4102 ล้มเหลวครั้งที่ 2/3: ECONNREFUSED
+[external-api] รอ 1000 ms แล้วลองใหม่
+[external-api] localhost:4102 ล้มเหลวครั้งที่ 3/3: ECONNREFUSED
+[external-api] ลองครบ 3 ครั้งแล้วยังล้มเหลว (ECONNREFUSED)
+POST /api/v1/boardgames 201 1526.580 ms
+[gateway] boardgame-service ไม่พร้อมใช้งาน (ECONNREFUSED)
+[gateway] boardgame-service ตอบช้าเกิน timeout (ECONNABORTED)
+[notification-service] ส่งไป Discord ไม่สำเร็จ: เชื่อมต่อ Discord ไม่ได้ (ECONNREFUSED)
+[external-api] localhost:4102 ล้มเหลวครั้งที่ 1/3: HTTP 502
+...
+[external-api] ลองครบ 3 ครั้งแล้วยังล้มเหลว (HTTP 502)
+POST /api/v1/boardgames 201 1675.444 ms
+```
+
+**ข้อสรุปส่วน A**
+
+- Gateway ตอบ **503 พร้อมข้อความที่บอกว่า service ไหนไม่พร้อม** ภายในไม่กี่มิลลิวินาที ไม่ค้างและไม่ crash และกลับมาใช้งานได้เองเมื่อ service กลับมา
+- service ค้าง: Gateway ตัดที่ `GATEWAY_TIMEOUT_MS` (10 วินาที) แล้วตอบ **504** ค่า 10 วินาทีตั้งให้มากกว่าเวลาแย่สุดของการเพิ่มเกม (~7.6 วินาที ในส่วน B) เพื่อไม่ให้ Gateway ตอบ 504 ทั้งที่เกมถูกบันทึกแล้ว
+- ความล้มเหลว **ไม่ลามข้าม service**: notification-service ล่ม ผู้ใช้ยังดู/เพิ่มบอร์ดเกมได้ (สถานะ `degraded`) และ boardgame-service ล่มก็ยังดูประวัติแจ้งเตือนได้
+- API ภายนอก (Discord) ล้มเหลว: retry ครบ 3 ครั้งแล้ว fallback เป็น 201 + `sent: false` ข้อมูลเกมถูกบันทึกเสมอ
+- ข้อสังเกต: หลังรีสตาร์ท notification-service ประวัติการแจ้งเตือนว่างเปล่า (G2 ได้ `data: []`) เพราะเก็บในหน่วยความจำ (ข้อจำกัดที่ระบุไว้ใน `architecture.md`)
+
+## ส่วน B: การเรียก Discord ผ่าน notification-service
 
 ทดสอบเมื่อ 27 ตุลาคม 2569 (2026-10-27) บนเครื่อง local (Node.js 24 + MySQL 8 ใน Docker) โดยยิง `POST /api/v1/boardgames` ด้วย curl
 
+> ส่วนนี้ทดสอบก่อนเพิ่ม API Gateway โดยเรียก boardgame-service ตรง เส้นทาง boardgame-service → notification-service → Discord และโค้ด retry/timeout/fallback ใน `src/services/external-api.js` ไม่ได้เปลี่ยนหลังเพิ่ม Gateway (กรณี G1 และ G4 ในส่วน A ยืนยันซ้ำผ่าน Gateway เมื่อ 1 พ.ย. 2569: retry 3 ครั้ง 1.53 / 1.68 วินาที) พอร์ตใน log เป็นพอร์ตที่ใช้ทดสอบ
+
 ### 1. สิ่งที่เปลี่ยนจากระยะที่ 2
 
-ในระยะที่ 2 API หลักเรียก Discord Webhook เองโดยตรง ระยะที่ 3 แยกการแจ้งเตือนออกเป็น **notification-service** (microservice พอร์ต 3001) เส้นทางของคำขอจึงเป็น
+ในระยะที่ 2 API เรียก Discord Webhook เองโดยตรง ระยะที่ 3 แยกการแจ้งเตือนออกเป็น **notification-service** (พอร์ต 4002) เส้นทางของคำขอจึงเป็น
 
 ```
-Board Game API (3000) --HTTP--> notification-service (3001) --HTTP--> Discord Webhook
-   timeout 2000 ms                 timeout 1500 ms (ครั้งเดียว)
-   retry 2 ครั้ง + backoff         Discord ล้มเหลว -> ตอบ 502 / ช้า -> ตอบ 504
-   fallback: ยังตอบ 201             ไม่ได้ตั้งค่า webhook -> ตอบ 200 sent:false
+boardgame-service (4001) --HTTP--> notification-service (4002) --HTTP--> Discord Webhook
+   timeout 2000 ms                    timeout 1500 ms (ครั้งเดียว)
+   retry 2 ครั้ง + backoff            Discord ล้มเหลว -> ตอบ 502 / ช้า -> ตอบ 504
+   fallback: ยังตอบ 201                ไม่ได้ตั้งค่า webhook -> ตอบ 200 sent:false
 ```
 
-- **Retry/Timeout/Fallback อยู่ที่ฝั่งผู้เรียก** (`src/services/external-api.js` ใน API หลัก) เหมือนเดิม
-- notification-service ส่ง Discord ครั้งเดียวและแปลงความล้มเหลวเป็น 5xx เพื่อให้ API หลัก retry ได้ จึงไม่เกิด retry ซ้อนกัน 2 ชั้น
-- timeout ของ notification-service (1500 ms) ตั้งให้น้อยกว่าของ API หลัก (2000 ms) เพื่อให้ service ตอบ 504 ได้ทันก่อนที่ API หลักจะตัดการรอ
+- **Retry/Timeout/Fallback อยู่ที่ฝั่งผู้เรียก** (`src/services/external-api.js` ใน boardgame-service) เหมือนเดิม
+- notification-service ส่ง Discord ครั้งเดียวและแปลงความล้มเหลวเป็น 5xx เพื่อให้ boardgame-service retry ได้ จึงไม่เกิด retry ซ้อนกัน 2 ชั้น
+- timeout ของ notification-service (1500 ms) ตั้งให้น้อยกว่าของ boardgame-service (2000 ms) เพื่อให้ service ตอบ 504 ได้ทันก่อนที่ผู้เรียกจะตัดการรอ
 
 ### 2. วิธีจำลองความล้มเหลว
 
@@ -29,7 +101,7 @@ npm run mock:external -- fail 4002   # ตอบ 503 ทุกครั้ง
 npm run mock:external -- slow 4003   # รอ 10 วินาทีก่อนตอบ
 ```
 
-แล้วตั้ง `DISCORD_WEBHOOK_URL` ของ notification-service หรือ `NOTIFICATION_SERVICE_URL` ของ API หลักให้ชี้ไปที่ mock
+แล้วตั้ง `DISCORD_WEBHOOK_URL` ของ notification-service หรือ `NOTIFICATION_SERVICE_URL` ของ boardgame-service ให้ชี้ไปที่ mock
 
 ### 3. สรุปผลการทดสอบ
 
@@ -84,7 +156,7 @@ POST /api/v1/boardgames 201 1576.063 ms - 346
 
 #### กรณี 2: Discord ตอบ HTTP 503
 
-ฝั่ง API หลัก
+ฝั่ง boardgame-service
 
 ```
 [external-api] localhost:3112 ล้มเหลวครั้งที่ 1/3: HTTP 502
@@ -107,7 +179,7 @@ POST /notifications 502 58.194 ms - 73
 [mock-external:fail] คำขอที่ 3: POST /webhook
 ```
 
-ผลที่ได้: notification-service แปลง 503 ของ Discord เป็น 502 แล้ว API หลัก retry ครบ 3 ครั้ง Discord (mock) ได้รับคำขอ **3 ครั้งพอดี** ไม่มี retry ซ้อน ประวัติใน notification-service บันทึก `status: "failed"` 3 รายการ
+ผลที่ได้: notification-service แปลง 503 ของ Discord เป็น 502 แล้ว boardgame-service retry ครบ 3 ครั้ง Discord (mock) ได้รับคำขอ **3 ครั้งพอดี** ไม่มี retry ซ้อน ประวัติใน notification-service บันทึก `status: "failed"` 3 รายการ
 
 #### กรณี 3: Discord ตอบช้าเกิน timeout ของ notification-service
 
@@ -127,7 +199,7 @@ POST /api/v1/boardgames 201 6121.742 ms - 346
 
 ผลที่ได้: mock หน่วง 10 วินาที แต่ notification-service ตัดที่ 1.5 วินาทีจริงทุกครั้ง เวลารวม 6.12 วินาที (1.5 × 3 + backoff 1.5) แล้วตอบ 201 พร้อม fallback
 
-#### กรณี 4: notification-service ค้าง (timeout ของ API หลัก)
+#### กรณี 4: notification-service ค้าง (timeout ของ boardgame-service)
 
 ```
 [external-api] localhost:4004 ล้มเหลวครั้งที่ 1/3: timeout (เกิน 2000 ms)
@@ -139,7 +211,7 @@ POST /api/v1/boardgames 201 6121.742 ms - 346
 POST /api/v1/boardgames 201 7571.133 ms - 347
 ```
 
-ผลที่ได้: API หลักตัดการรอที่ 2 วินาทีจริงทั้ง 3 ครั้ง เวลารวม 7.57 วินาที (2 × 3 + 1.5) ไม่ค้างตามที่ service หน่วงไว้ 10 วินาที และ `GET /api/v1/health` รายงาน `degraded` เพราะเช็ค `/health` ของ service ไม่ทันใน 1 วินาที
+ผลที่ได้: boardgame-service ตัดการรอที่ 2 วินาทีจริงทั้ง 3 ครั้ง เวลารวม 7.57 วินาที (2 × 3 + 1.5) ไม่ค้างตามที่ service หน่วงไว้ 10 วินาที และ `GET /api/v1/health` รายงาน `degraded` เพราะเช็ค `/health` ของ notification-service ไม่ทันใน 1 วินาที (ขณะทดสอบ endpoint health ยังอยู่ที่ boardgame-service)
 
 #### กรณี 5: ไม่ได้ตั้งค่า webhook
 
@@ -150,12 +222,12 @@ POST /notifications 200 8.074 ms - 162
 POST /api/v1/boardgames 201 66.639 ms - 347
 ```
 
-ผลที่ได้: service ตอบ 200 พร้อม `sent: false` (ไม่ใช่ความผิดพลาดชั่วคราว) API หลักจึง **ไม่ retry** (`attempts: 1`) และตอบ 201 พร้อม fallback ทันที ประวัติบันทึก `status: "skipped"`
+ผลที่ได้: service ตอบ 200 พร้อม `sent: false` (ไม่ใช่ความผิดพลาดชั่วคราว) boardgame-service จึง **ไม่ retry** (`attempts: 1`) และตอบ 201 พร้อม fallback ทันที ประวัติบันทึก `status: "skipped"`
 
 ### 5. ข้อสรุประยะที่ 3
 
 - **Retry:** network error, 5xx และ timeout ลองใหม่ครบ 3 ครั้งพร้อม exponential backoff (500 → 1000 ms) และนับจำนวนครั้งที่ปลายทางได้รับจริงตรงกัน (กรณี 2)
-- **Timeout:** ทำงานทั้ง 2 ชั้น คือ notification-service ตัดที่ 1500 ms (กรณี 3) และ API หลักตัดที่ 2000 ms (กรณี 4)
+- **Timeout:** ทำงานทั้ง 2 ชั้น คือ notification-service ตัดที่ 1500 ms (กรณี 3) และ boardgame-service ตัดที่ 2000 ms (กรณี 4)
 - **Fallback:** ทุกกรณีผู้ใช้ได้ 201 และข้อมูลถูกบันทึก พร้อม `notification.sent = false` และข้อความอธิบาย หน้าเว็บ Frontend แสดงเป็นข้อความเตือนสีเหลืองว่า "เพิ่มแล้ว แต่ส่งแจ้งเตือนไม่สำเร็จ"
 - **Graceful degradation:** เมื่อ notification-service ล่ม ระบบหลัก (บอร์ดเกม/หมวดหมู่) ยังใช้งานได้ปกติ `/api/v1/health` บอกสถานะ `degraded` และหน้า Frontend แสดงป้าย "แจ้งเตือนใช้งานไม่ได้ชั่วคราว"
 - **ข้อสังเกต:** กรณีแย่ที่สุด (กรณี 4) การเพิ่มเกมใช้เวลาประมาณ 7.6 วินาที เพราะระบบรอผลแจ้งเตือนก่อนตอบ ปรับให้เร็วขึ้นได้ผ่าน `EXTERNAL_API_TIMEOUT_MS`, `EXTERNAL_API_MAX_RETRIES` และ `DISCORD_TIMEOUT_MS` ใน `.env` โดยไม่ต้องแก้โค้ด

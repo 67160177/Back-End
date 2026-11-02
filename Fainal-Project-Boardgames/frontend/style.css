@@ -1,0 +1,659 @@
+:root {
+  --bg: #f5f3ef;
+  --surface: #ffffff;
+  --surface-2: #f0ede7;
+  --text: #1f1d1a;
+  --muted: #6b665e;
+  --border: #e2ddd4;
+  --primary: #2f5d50;
+  --primary-hover: #244a40;
+  --primary-text: #ffffff;
+  --danger: #b3392f;
+  --danger-bg: #fbeceb;
+  --ok: #2e7d4f;
+  --ok-bg: #e7f4ec;
+  --warn: #9a6a00;
+  --warn-bg: #fdf3dc;
+  --chip: #e9eff3;
+  --chip-text: #2b4a5e;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161514;
+    --surface: #201f1d;
+    --surface-2: #2a2826;
+    --text: #ece8e1;
+    --muted: #a39d93;
+    --border: #36332f;
+    --primary: #5fa38f;
+    --primary-hover: #73b5a1;
+    --primary-text: #0f1a17;
+    --danger: #ef8a80;
+    --danger-bg: #3a2220;
+    --ok: #7ccf9d;
+    --ok-bg: #1e3326;
+    --warn: #e6bb5c;
+    --warn-bg: #3a2f17;
+    --chip: #263540;
+    --chip-text: #b9d3e4;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* ให้ attribute hidden ชนะ display ของ class (เช่น .btn ที่เป็น inline-flex) */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans Thai", "Leelawadee UI", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+h1,
+h2 {
+  margin: 0;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 1.25rem;
+}
+
+h2 {
+  font-size: 1.05rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ===== Top bar ===== */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-icon {
+  font-size: 1.8rem;
+}
+
+.subtitle,
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.link {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ===== Layout ===== */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 20px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 24px 48px;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+  .topbar {
+    padding: 12px 16px;
+  }
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.panel > h2 {
+  margin-bottom: 14px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap; /* จอแคบ: ตัวกรอง/การเรียง/ปุ่มขึ้นบรรทัดใหม่แทนการล้นจอ */
+  gap: 8px;
+}
+
+/* ===== Controls ===== */
+input,
+select {
+  width: 100%;
+  padding: 9px 11px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.toolbar select {
+  flex: 1 1 150px;
+  width: auto;
+  min-width: 0;
+}
+
+input:focus,
+select:focus,
+.btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 16px;
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--border);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+.btn-small {
+  padding: 5px 10px;
+  font-size: 0.85rem;
+}
+
+/* ===== Forms ===== */
+.field {
+  margin-bottom: 12px;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.field-error,
+.form-error {
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 0.82rem;
+  min-height: 0;
+}
+
+.form-error:empty,
+.field-error:empty {
+  display: none;
+}
+
+.form-error {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: var(--danger-bg);
+  border-radius: 6px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ===== Status (loading / error / empty) ===== */
+.status:empty {
+  display: none;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.status.is-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ===== Game list ===== */
+.game-list,
+.chip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.game-list {
+  display: grid;
+  gap: 10px;
+}
+
+.game {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.game.is-editing {
+  border-color: var(--primary);
+}
+
+.game-name {
+  margin: 0 0 2px;
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.game-meta {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.game-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 560px) {
+  .game {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  background: var(--chip);
+  color: var(--chip-text);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.chip.is-editing {
+  outline: 2px solid var(--primary);
+}
+
+.chip-muted {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.chip button {
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ===== Pills ===== */
+.pill {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: none;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pill-muted {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.pill-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.pill-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.pill-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ===== Dialog ===== */
+dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+/* ===== Pagination ===== */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  margin-top: 14px;
+}
+
+.pager-info,
+.pager-size {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.pager-size select {
+  width: auto;
+  margin: 0 4px;
+  padding: 4px 8px;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.link-form {
+  display: flex;
+  gap: 8px;
+}
+
+.field-hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* ===== Toasts ===== */
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  max-width: 380px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  font-size: 0.9rem;
+  pointer-events: auto;
+}
+
+.toast.is-error {
+  background: var(--danger);
+  color: #fff;
+}
+
+.toast.is-warn {
+  background: var(--warn);
+  color: #fff;
+}
+
+/* ===== การแจ้งเตือนล่าสุด ===== */
+.notification-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notification {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: start;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.notification-text {
+  overflow-wrap: anywhere;
+}
+
+.notification-time {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.chip-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.chip-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ===== การเข้าสู่ระบบ ===== */
+/* <body class="is-guest"> = ยังไม่เข้าสู่ระบบ: ซ่อนส่วนที่ต้องเข้าสู่ระบบ / เข้าแล้ว: ซ่อนส่วนสำหรับผู้เยี่ยมชม */
+.is-guest .requires-auth,
+body:not(.is-guest) .guest-only {
+  display: none !important;
+}
+
+.user-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.guest-only .hint {
+  margin-bottom: 12px;
+}
+
+.auth-switch {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.role-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 0.75rem;
+  font-weight: 700;
+  vertical-align: middle;
+}

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Board Game Manager</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎲%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="is-guest">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">🎲</span>
+        <div>
+          <h1>Board Game Manager</h1>
+          <p class="subtitle">ระบบจัดการข้อมูลบอร์ดเกม</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" id="health-pill" class="pill pill-muted" title="กดเพื่อตรวจสถานะอีกครั้ง">
+          กำลังตรวจสถานะ...
+        </button>
+        <a class="link" href="/api-docs" target="_blank" rel="noopener">เอกสาร API</a>
+        <!-- สถานะการเข้าสู่ระบบ: ชื่อผู้ใช้ + ออกจากระบบ หรือปุ่มเข้าสู่ระบบ (app.js renderAuth) -->
+        <div id="user-box" class="user-box">
+          <button type="button" id="login-open" class="btn btn-primary btn-small guest-only">เข้าสู่ระบบ</button>
+          <span id="user-name" class="user-name requires-auth"></span>
+          <button type="button" id="logout" class="btn btn-ghost btn-small requires-auth">ออกจากระบบ</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- ===== รายการบอร์ดเกม: GET /api/v1/boardgames ===== -->
+      <section class="panel" aria-labelledby="games-title">
+        <div class="panel-head">
+          <h2 id="games-title">รายการบอร์ดเกม</h2>
+          <div class="toolbar">
+            <label class="sr-only" for="sort-games">เรียงลำดับ</label>
+            <select id="sort-games">
+              <option value="id:asc">เรียงตามลำดับที่เพิ่ม</option>
+              <option value="createdAt:desc">เพิ่มล่าสุดก่อน</option>
+              <option value="name:asc">ชื่อ A → Z</option>
+              <option value="name:desc">ชื่อ Z → A</option>
+              <option value="maxPlayers:desc">เล่นได้หลายคนที่สุด</option>
+              <option value="minPlayers:asc">ผู้เล่นขั้นต่ำน้อยที่สุด</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="games-status" class="status" role="status" aria-live="polite"></div>
+        <ul id="games-list" class="game-list"></ul>
+
+        <nav id="games-pager" class="pager" aria-label="เปลี่ยนหน้ารายการบอร์ดเกม" hidden>
+          <button type="button" id="page-prev" class="btn btn-ghost btn-small">‹ ก่อนหน้า</button>
+          <span id="page-info" class="pager-info" aria-live="polite"></span>
+          <button type="button" id="page-next" class="btn btn-ghost btn-small">ถัดไป ›</button>
+          <label class="pager-size">
+            หน้าละ
+            <select id="page-size">
+              <option value="3">3</option>
+              <option value="5" selected>5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+            </select>
+            เกม
+          </label>
+        </nav>
+      </section>
+
+      <aside class="side">
+        <!-- ===== แสดงเมื่อยังไม่ได้เข้าสู่ระบบ: ดูข้อมูลได้ แต่เพิ่ม/แก้ไข/ลบไม่ได้ ===== -->
+        <section class="panel guest-only" aria-labelledby="guest-title">
+          <h2 id="guest-title">เข้าสู่ระบบเพื่อจัดการข้อมูล</h2>
+          <p class="hint">ทุกคนดูรายการบอร์ดเกมและหมวดหมู่ได้ ส่วนการเพิ่ม แก้ไข และลบ ต้องเข้าสู่ระบบก่อน</p>
+          <div class="form-actions">
+            <button type="button" id="guest-login" class="btn btn-primary">เข้าสู่ระบบ</button>
+            <button type="button" id="guest-register" class="btn btn-ghost">สมัครสมาชิก</button>
+          </div>
+        </section>
+
+        <!-- ===== ฟอร์มเพิ่ม/แก้ไขบอร์ดเกม: POST /api/v1/boardgames หรือ PUT /api/v1/boardgames/:id ===== -->
+        <section class="panel requires-auth" aria-labelledby="game-form-title">
+          <h2 id="game-form-title">เพิ่มบอร์ดเกม</h2>
+          <form id="game-form" novalidate>
+            <div class="field">
+              <label for="game-name">ชื่อบอร์ดเกม</label>
+              <input id="game-name" name="name" type="text" maxlength="100" autocomplete="off" placeholder="เช่น Carcassonne" aria-describedby="game-name-error" />
+              <p class="field-error" id="game-name-error"></p>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="game-min">ผู้เล่นขั้นต่ำ</label>
+                <input id="game-min" name="minPlayers" type="number" min="1" step="1" inputmode="numeric" placeholder="2" aria-describedby="game-min-error" />
+                <p class="field-error" id="game-min-error"></p>
+              </div>
+              <div class="field">
+                <label for="game-max">ผู้เล่นสูงสุด</label>
+                <input id="game-max" name="maxPlayers" type="number" min="1" step="1" inputmode="numeric" placeholder="5" aria-describedby="game-max-error" />
+                <p class="field-error" id="game-max-error"></p>
+              </div>
+            </div>
+            <p class="form-error" id="game-form-error" role="alert"></p>
+            <div class="form-actions">
+              <button type="submit" id="game-submit" class="btn btn-primary">เพิ่มบอร์ดเกม</button>
+              <button type="button" id="game-cancel" class="btn btn-ghost" hidden>ยกเลิก</button>
+            </div>
+          </form>
+        </section>
+
+        <!-- ===== หมวดหมู่: GET / POST / PUT / DELETE /api/v1/categories ===== -->
+        <section class="panel" aria-labelledby="category-form-title">
+          <h2 id="category-form-title" class="requires-auth">เพิ่มหมวดหมู่</h2>
+          <h2 class="guest-only">หมวดหมู่</h2>
+          <form id="category-form" class="requires-auth" novalidate>
+            <div class="field">
+              <label for="category-name">ชื่อหมวดหมู่</label>
+              <input id="category-name" name="name" type="text" maxlength="100" autocomplete="off" placeholder="เช่น Co-op" aria-describedby="category-name-error" />
+              <p class="field-error" id="category-name-error"></p>
+            </div>
+            <p class="form-error" id="category-form-error" role="alert"></p>
+            <div class="form-actions">
+              <button type="submit" id="category-submit" class="btn btn-primary">เพิ่มหมวดหมู่</button>
+              <button type="button" id="category-cancel" class="btn btn-ghost" hidden>ยกเลิก</button>
+            </div>
+          </form>
+          <p class="hint">หมวดหมู่ทั้งหมด<span id="category-hint" class="requires-auth"></span></p>
+          <div id="categories-status" class="status" role="status" aria-live="polite"></div>
+          <ul id="category-list" class="chip-list"></ul>
+        </section>
+
+        <!-- ===== การแจ้งเตือนล่าสุด: GET /api/v1/notifications (notification-service) ===== -->
+        <section class="panel" aria-labelledby="notifications-title">
+          <div class="panel-head">
+            <h2 id="notifications-title">การแจ้งเตือนล่าสุด</h2>
+            <button type="button" id="notifications-refresh" class="btn btn-ghost btn-small">โหลดใหม่</button>
+          </div>
+          <div id="notifications-status" class="status" role="status" aria-live="polite"></div>
+          <ul id="notification-list" class="notification-list"></ul>
+        </section>
+      </aside>
+    </main>
+
+    <!-- ===== หน้าต่างหมวดหมู่ของเกม: GET / POST / DELETE /api/v1/boardgames/:id/categories ===== -->
+    <dialog id="categories-dialog" aria-labelledby="dialog-title">
+      <div class="dialog-head">
+        <h2 id="dialog-title">หมวดหมู่ของเกม</h2>
+        <button type="button" id="dialog-close" class="btn btn-ghost btn-small" aria-label="ปิด">✕</button>
+      </div>
+      <div id="dialog-status" class="status" role="status" aria-live="polite"></div>
+      <ul id="dialog-list" class="chip-list"></ul>
+      <form id="link-form" class="link-form requires-auth" novalidate>
+        <label class="sr-only" for="link-category">เลือกหมวดหมู่ที่จะเพิ่ม</label>
+        <select id="link-category"></select>
+        <button type="submit" id="link-submit" class="btn btn-primary btn-small">เพิ่ม</button>
+      </form>
+      <p class="form-error" id="link-form-error" role="alert"></p>
+    </dialog>
+
+    <!-- ===== เข้าสู่ระบบ / สมัครสมาชิก: POST /api/v1/auth/login, POST /api/v1/auth/register ===== -->
+    <dialog id="auth-dialog" aria-labelledby="auth-title">
+      <div class="dialog-head">
+        <h2 id="auth-title">เข้าสู่ระบบ</h2>
+        <button type="button" id="auth-close" class="btn btn-ghost btn-small" aria-label="ปิด">✕</button>
+      </div>
+      <form id="auth-form" novalidate>
+        <div class="field">
+          <label for="auth-username">ชื่อผู้ใช้</label>
+          <input id="auth-username" name="username" type="text" maxlength="30" autocomplete="username" aria-describedby="auth-username-error" />
+          <p class="field-error" id="auth-username-error"></p>
+        </div>
+        <div class="field">
+          <label for="auth-password">รหัสผ่าน</label>
+          <input id="auth-password" name="password" type="password" maxlength="72" autocomplete="current-password" aria-describedby="auth-password-error" />
+          <p class="field-error" id="auth-password-error"></p>
+        </div>
+        <div class="field" id="auth-confirm-field" hidden>
+          <label for="auth-confirm">ยืนยันรหัสผ่าน</label>
+          <input id="auth-confirm" name="confirm" type="password" maxlength="72" autocomplete="new-password" aria-describedby="auth-confirm-error" />
+          <p class="field-error" id="auth-confirm-error"></p>
+        </div>
+        <p class="form-error" id="auth-form-error" role="alert"></p>
+        <div class="form-actions">
+          <button type="submit" id="auth-submit" class="btn btn-primary">เข้าสู่ระบบ</button>
+        </div>
+      </form>
+      <p class="hint auth-switch">
+        <span id="auth-switch-text">ยังไม่มีบัญชี?</span>
+        <button type="button" id="auth-switch" class="link-button">สมัครสมาชิก</button>
+      </p>
+    </dialog>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,1894 @@
+openapi: 3.0.3
+
+info:
+  title: Board Game Management API
+  version: 3.0.0
+  description: |
+    API สำหรับระบบจัดการข้อมูลบอร์ดเกม (Board Game Management System)
+    จัดการข้อมูลบอร์ดเกม หมวดหมู่ และความสัมพันธ์แบบ Many-to-Many ระหว่างสองสิ่งนี้
+
+    **สถาปัตยกรรม (ระยะที่ 3)** client เรียกทุกอย่างผ่าน **API Gateway** (`http://localhost:3000`) ซึ่งส่งต่อไปยัง service ภายใน
+    - **boardgame-service** (`:4001`) บอร์ดเกม หมวดหมู่ ความสัมพันธ์ N:M เชื่อมต่อ MySQL
+    - **notification-service** (`:4002`) ส่งแจ้งเตือนเข้า Discord Webhook และเก็บประวัติ
+    - **auth-service** (`:4003`) สมัครสมาชิก เข้าสู่ระบบ ออก JWT (เจ้าของตาราง `users`)
+
+    endpoint ภายในของแต่ละ service อยู่ใน tag **Internal Services** (client ไม่ควรเรียกตรง)
+
+    **การยืนยันตัวตน (JWT)**
+    - ดูข้อมูล (`GET`) ได้ทุกคนโดยไม่ต้องเข้าสู่ระบบ
+    - เพิ่ม/แก้ไข/ลบ (`POST`/`PUT`/`PATCH`/`DELETE` ของบอร์ดเกม หมวดหมู่ ความสัมพันธ์) ต้องแนบ header `Authorization: Bearer <token>`
+    - **ลบบอร์ดเกม** และ **ลบหมวดหมู่** ต้องเป็น role `admin` (member ได้ 403 `FORBIDDEN`) สมัครผ่าน API ได้ `member` เสมอ ส่วน admin สร้างด้วย `npm run create-admin`
+    - ได้ token จาก `POST /api/v1/auth/login` (อายุ 2 ชั่วโมง) ใน Swagger UI กดปุ่ม **Authorize** แล้ววาง token
+    - Gateway ตรวจ token เอง: ไม่มี token → 401 `UNAUTHORIZED`, หมดอายุ → 401 `TOKEN_EXPIRED`, ปลอม/เสีย → 401 `INVALID_TOKEN` (คำขอไม่ถูกส่งต่อไป service)
+
+    **รูปแบบ Response**
+    - สำเร็จ: `{ "message": "...", "data": ... }`
+    - ผิดพลาด: `{ "error": { "code": "...", "message": "..." } }`
+
+    **ข้อควรทราบ**
+    - ขนาด request body สูงสุด 10 KB (เกินจะได้ 413)
+    - ถ้า JSON ใน body ผิดรูปแบบ จะได้ 400 พร้อม `error.code = "entity.parse.failed"`
+    - ฟิลด์ที่เป็น integer (`minPlayers`, `maxPlayers`, `category_id`) ต้องส่งเป็นตัวเลขใน JSON ไม่ใช่ข้อความ (เช่น `2` ไม่ใช่ `"2"`)
+    - ชื่อ (`name`) จะถูกตัดช่องว่างหัวท้ายก่อนบันทึก
+    - path ที่ไม่มีอยู่จะได้ 404 พร้อม `error.code = "ROUTE_NOT_FOUND"`
+    - ถ้า service ปลายทางไม่พร้อม Gateway ตอบ 503 `SERVICE_UNAVAILABLE` / ตอบช้าเกิน 10 วินาที ตอบ 504 `GATEWAY_TIMEOUT`
+
+    **Rate limiting** (ตรวจที่ Gateway นับแยกตาม IP เกินแล้วได้ 429 `TOO_MANY_REQUESTS` พร้อม header `Retry-After`)
+    - `/api/v1/*` ทั้งหมด: 300 ครั้ง/นาที (`RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`) ยกเว้น `/api/v1/health`
+    - `/api/v1/auth/login` และ `/api/v1/auth/register` รวมกัน: 10 ครั้ง/นาที (`AUTH_RATE_LIMIT_MAX`) กันการเดารหัสผ่าน
+    - ทุกคำตอบมี header `RateLimit` และ `RateLimit-Policy` บอกโควตาที่เหลือ
+
+    **Caching** GET ของบอร์ดเกม/หมวดหมู่ถูก cache ที่ boardgame-service 30 วินาที (`CACHE_TTL_MS`)
+    และถูกล้างทันทีเมื่อมีการเพิ่ม แก้ไข หรือลบสำเร็จ header `X-Cache` บอกว่าเป็น `HIT` หรือ `MISS`
+
+servers:
+  - url: http://localhost:3000
+    description: API Gateway (Local development)
+
+# ค่าเริ่มต้น: ไม่ต้องยืนยันตัวตน / endpoint เพิ่ม-แก้ไข-ลบ ระบุ security: bearerAuth เอง
+security: []
+
+tags:
+  - name: Health
+    description: ตรวจสอบสถานะระบบ
+  - name: Boardgames
+    description: จัดการข้อมูลบอร์ดเกม (Gateway ส่งต่อไป boardgame-service)
+  - name: Categories
+    description: จัดการหมวดหมู่ (Gateway ส่งต่อไป boardgame-service)
+  - name: Boardgame Categories
+    description: จัดการความสัมพันธ์ระหว่างบอร์ดเกมกับหมวดหมู่ (Gateway ส่งต่อไป boardgame-service)
+  - name: Notifications
+    description: ประวัติการแจ้งเตือน (Gateway ส่งต่อไป notification-service)
+  - name: Auth
+    description: สมัครสมาชิกและเข้าสู่ระบบ (Gateway ส่งต่อไป auth-service)
+  - name: Internal Services
+    description: endpoint ภายในของแต่ละ microservice (Gateway และ service ด้วยกันเป็นผู้เรียก ไม่เปิดให้ client)
+
+paths:
+  /:
+    get:
+      tags: [Health]
+      summary: ข้อมูลของ API Gateway
+      operationId: getRoot
+      responses:
+        "200":
+          description: Gateway พร้อมใช้งาน
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  frontend:
+                    type: string
+                  docs:
+                    type: string
+              example:
+                message: Board Game API Gateway พร้อมใช้งาน
+                frontend: /app
+                docs: /api-docs
+
+  /api/v1/health:
+    get:
+      tags: [Health]
+      summary: ตรวจสอบสถานะของทุก service
+      operationId: getSystemHealth
+      description: |
+        Gateway เรียก `GET /health` ของทุก service พร้อมกัน (timeout 2 วินาทีต่อ service)
+
+        - ทุก service ปกติ: 200 `status = ok`
+        - notification-service หรือ auth-service ล่ม: 200 `status = degraded` (ยังดู/ค้นหาบอร์ดเกมได้)
+        - boardgame-service ล่ม (รวมถึงฐานข้อมูลล่ม): 503 `status = down`
+      responses:
+        "200":
+          description: ระบบใช้งานได้ (ok หรือ degraded)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemHealth"
+              examples:
+                ok:
+                  summary: ทุก service ปกติ
+                  value:
+                    status: ok
+                    services: { gateway: up, boardgameService: up, database: up, notificationService: up, authService: up }
+                degraded:
+                  summary: notification-service ล่ม
+                  value:
+                    status: degraded
+                    services: { gateway: up, boardgameService: up, database: up, notificationService: down, authService: up }
+        "503":
+          description: boardgame-service หรือฐานข้อมูลใช้งานไม่ได้
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemHealth"
+              example:
+                status: down
+                services: { gateway: up, boardgameService: down, database: down, notificationService: up, authService: up }
+
+  /api/v1/notifications:
+    get:
+      tags: [Notifications]
+      summary: ดึงประวัติการแจ้งเตือนล่าสุด
+      operationId: listNotifications
+      description: Gateway ส่งต่อไปที่ `GET http://localhost:4002/notifications` ของ notification-service
+      responses:
+        "200":
+          $ref: "#/components/responses/NotificationHistory"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: สมัครสมาชิก
+      operationId: register
+      description: |
+        Gateway ส่งต่อไปที่ `POST http://localhost:4003/auth/register` ของ auth-service
+        รหัสผ่านถูกเก็บเป็น scrypt hash + salt สุ่ม ไม่เก็บรหัสผ่านจริง
+        สมัครแล้วต้องเรียก `/api/v1/auth/login` เพื่อรับ token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterInput"
+      responses:
+        "201":
+          description: สมัครสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สมัครสมาชิกสำเร็จ
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 1
+                      username:
+                        type: string
+                        example: alice
+                      role:
+                        type: string
+                        enum: [member]
+                        description: สมัครผ่าน API ได้ member เสมอ
+        "400":
+          description: ข้อมูลไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                missingFields:
+                  summary: ส่งไม่ครบ
+                  value:
+                    error: { code: MISSING_FIELDS, message: กรุณาระบุ username และ password ให้ครบถ้วน }
+                invalidUsername:
+                  summary: username ผิดรูปแบบ
+                  value:
+                    error: { code: INVALID_USERNAME, message: "username ต้องยาว 3-30 ตัวอักษร ใช้ได้เฉพาะ a-z, A-Z, 0-9 และ _" }
+                invalidPassword:
+                  summary: password สั้น/ยาวเกิน
+                  value:
+                    error: { code: INVALID_PASSWORD, message: password ต้องยาว 8-72 ตัวอักษร }
+        "409":
+          description: username ถูกใช้แล้ว (ไม่สนตัวพิมพ์เล็ก/ใหญ่)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: USERNAME_TAKEN, message: username นี้ถูกใช้แล้ว }
+        "429":
+          $ref: "#/components/responses/TooManyAuthAttempts"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: เข้าสู่ระบบ รับ JWT
+      operationId: login
+      description: |
+        Gateway ส่งต่อไปที่ `POST http://localhost:4003/auth/login` ของ auth-service
+        นำ `data.token` ไปใส่ header `Authorization: Bearer <token>` ของคำขอเพิ่ม/แก้ไข/ลบ
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: เข้าสู่ระบบสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResult"
+        "400":
+          description: ส่งข้อมูลไม่ครบหรือไม่ใช่ข้อความ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: MISSING_FIELDS, message: กรุณาระบุ username และ password ให้ครบถ้วน }
+        "401":
+          description: username หรือ password ไม่ถูกต้อง (ตอบเหมือนกันทั้ง 2 กรณี)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: { code: INVALID_CREDENTIALS, message: username หรือ password ไม่ถูกต้อง }
+        "429":
+          $ref: "#/components/responses/TooManyAuthAttempts"
+        "503":
+          description: auth-service ไม่พร้อม หรือยังไม่ได้ตั้งค่า JWT_SECRET
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                unavailable:
+                  value:
+                    error: { code: SERVICE_UNAVAILABLE, message: auth-service ไม่พร้อมใช้งานในขณะนี้ }
+                notConfigured:
+                  value:
+                    error: { code: AUTH_NOT_CONFIGURED, message: ระบบยังไม่ได้ตั้งค่า JWT_SECRET }
+
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: ข้อมูลผู้ใช้ที่เข้าสู่ระบบอยู่
+      operationId: getCurrentUser
+      description: Gateway ตรวจ token ก่อน แล้วส่งต่อพร้อม header Authorization ไปที่ `GET http://localhost:4003/auth/me`
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: ข้อมูลผู้ใช้
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/v1/boardgames:
+    get:
+      tags: [Boardgames]
+      summary: ดึงรายการบอร์ดเกม (กรอง แบ่งหน้า เรียงลำดับ)
+      operationId: listBoardgames
+      description: |
+        คืนรายการบอร์ดเกมพร้อมชื่อหมวดหมู่ (คั่นด้วยจุลภาค) รองรับการกรองตามหมวดหมู่ การแบ่งหน้า และการเรียงลำดับ
+
+        - ไม่ส่ง `page`/`limit` = หน้า 1 หน้าละ 20 รายการ (สูงสุด 100) ดูจำนวนทั้งหมดได้ที่ `pagination`
+        - ขอหน้าที่เกินจำนวนจริงจะได้ `data` เป็นอาร์เรย์ว่าง (ไม่ใช่ error)
+        - ค่าที่เรียงซ้ำกันจะเรียงตาม `id` เป็นลำดับรอง ผลแต่ละหน้าจึงคงที่
+
+        - ถ้าส่งทั้ง `category` และ `category_id` จะใช้ `category` เท่านั้น
+        - เมื่อกรองตามหมวดหมู่ ฟิลด์ `categories` ของแต่ละเกมจะแสดงเฉพาะหมวดหมู่ที่ตรงกับตัวกรอง
+      parameters:
+        - name: category
+          in: query
+          required: false
+          description: ชื่อหมวดหมู่ (ไม่สนใจตัวพิมพ์เล็กใหญ่)
+          schema:
+            type: string
+            example: strategy
+        - name: category_id
+          in: query
+          required: false
+          description: ID ของหมวดหมู่
+          schema:
+            type: integer
+            example: 1
+        - name: page
+          in: query
+          required: false
+          description: หน้าที่ต้องการ (เริ่มที่ 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          description: จำนวนรายการต่อหน้า
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sort
+          in: query
+          required: false
+          description: ฟิลด์ที่ใช้เรียง
+          schema:
+            type: string
+            enum: [id, name, minPlayers, maxPlayers, createdAt]
+            default: id
+        - name: order
+          in: query
+          required: false
+          description: ทิศทางการเรียง (ไม่สนตัวพิมพ์เล็กใหญ่)
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+      responses:
+        "200":
+          description: สำเร็จ (ถ้าไม่พบข้อมูลที่ตรงเงื่อนไข จะได้ `data` เป็นอาร์เรย์ว่าง)
+          headers:
+            X-Cache:
+              $ref: "#/components/headers/XCache"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Boardgame"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: query parameter ไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidCategoryId:
+                  summary: category_id ไม่ใช่จำนวนเต็มบวก
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: category_id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                invalidQuery:
+                  summary: ส่ง category ซ้ำหลายค่า
+                  value:
+                    error:
+                      code: INVALID_QUERY
+                      message: category ต้องเป็นข้อความและระบุได้เพียงค่าเดียว
+                invalidLimit:
+                  summary: limit เกิน 100 หรือไม่ใช่จำนวนเต็มบวก
+                  value:
+                    error:
+                      code: INVALID_QUERY
+                      message: limit ต้องเป็นตัวเลขจำนวนเต็มระหว่าง 1 ถึง 100
+                invalidSort:
+                  summary: sort ไม่อยู่ในรายการที่อนุญาต
+                  value:
+                    error:
+                      code: INVALID_QUERY
+                      message: sort ต้องเป็นหนึ่งใน id, name, minPlayers, maxPlayers, createdAt
+                invalidOrder:
+                  summary: order ไม่ใช่ asc/desc
+                  value:
+                    error:
+                      code: INVALID_QUERY
+                      message: order ต้องเป็น asc หรือ desc
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    post:
+      tags: [Boardgames]
+      summary: เพิ่มบอร์ดเกมใหม่
+      operationId: createBoardgame
+      security:
+        - bearerAuth: []
+      description: |
+        เมื่อเพิ่มสำเร็จ boardgame-service จะเรียก notification-service ให้ส่งแจ้งเตือนไปที่ Discord (API ภายนอก)
+        โดยมี timeout, retry (ลองใหม่เมื่อ network error / timeout / 5xx) และ fallback
+
+        ถ้าแจ้งเตือนไม่สำเร็จ ระบบยังตอบ 201 ตามปกติ โดยฟิลด์ `notification.sent` จะเป็น `false`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BoardgameInput"
+      responses:
+        "201":
+          description: เพิ่มบอร์ดเกมสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: เพิ่มบอร์ดเกมสำเร็จ
+                  data:
+                    $ref: "#/components/schemas/BoardgameBase"
+                  notification:
+                    $ref: "#/components/schemas/Notification"
+        "400":
+          description: ข้อมูลไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                missingFields:
+                  summary: ส่งข้อมูลไม่ครบ
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ name, minPlayers และ maxPlayers ให้ครบถ้วน
+                invalidName:
+                  summary: name ว่าง ไม่ใช่ข้อความ หรือยาวเกิน 100 ตัวอักษร
+                  value:
+                    error:
+                      code: INVALID_NAME
+                      message: name ต้องเป็นข้อความที่ไม่ว่างเปล่าและยาวไม่เกิน 100 ตัวอักษร
+                invalidPlayers:
+                  summary: จำนวนผู้เล่นไม่ใช่จำนวนเต็ม
+                  value:
+                    error:
+                      code: INVALID_PLAYERS
+                      message: minPlayers และ maxPlayers ต้องเป็นตัวเลขจำนวนเต็ม
+                invalidPlayerRange:
+                  summary: ช่วงจำนวนผู้เล่นไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_PLAYER_RANGE
+                      message: จำนวนผู้เล่นต้องอยู่ระหว่าง 1 ถึง 2147483647 และ maxPlayers ต้องมากกว่าหรือเท่ากับ minPlayers
+                malformedJson:
+                  $ref: "#/components/examples/MalformedJson"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/DuplicateName"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/boardgames/{id}:
+    parameters:
+      - $ref: "#/components/parameters/BoardgameId"
+
+    get:
+      tags: [Boardgames]
+      summary: ดึงข้อมูลบอร์ดเกมตาม ID
+      operationId: getBoardgameById
+      responses:
+        "200":
+          description: สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/Boardgame"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    put:
+      tags: [Boardgames]
+      summary: แก้ไขข้อมูลบอร์ดเกมทั้งระเบียน
+      operationId: replaceBoardgame
+      security:
+        - bearerAuth: []
+      description: ต้องส่งครบทุกฟิลด์ (`name`, `minPlayers`, `maxPlayers`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BoardgameInput"
+      responses:
+        "200":
+          description: แก้ไขสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: แก้ไขข้อมูลบอร์ดเกมสำเร็จ
+                  data:
+                    $ref: "#/components/schemas/BoardgameBase"
+        "400":
+          description: id หรือข้อมูลที่ส่งมาไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                missingFields:
+                  summary: ส่งข้อมูลไม่ครบ
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ name, minPlayers และ maxPlayers ให้ครบถ้วน
+                invalidName:
+                  summary: name ว่าง ไม่ใช่ข้อความ หรือยาวเกิน 100 ตัวอักษร
+                  value:
+                    error:
+                      code: INVALID_NAME
+                      message: name ต้องเป็นข้อความที่ไม่ว่างเปล่าและยาวไม่เกิน 100 ตัวอักษร
+                invalidPlayers:
+                  summary: จำนวนผู้เล่นไม่ใช่จำนวนเต็ม
+                  value:
+                    error:
+                      code: INVALID_PLAYERS
+                      message: minPlayers และ maxPlayers ต้องเป็นตัวเลขจำนวนเต็ม
+                invalidPlayerRange:
+                  summary: ช่วงจำนวนผู้เล่นไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_PLAYER_RANGE
+                      message: จำนวนผู้เล่นต้องอยู่ระหว่าง 1 ถึง 2147483647 และ maxPlayers ต้องมากกว่าหรือเท่ากับ minPlayers
+                malformedJson:
+                  $ref: "#/components/examples/MalformedJson"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "409":
+          $ref: "#/components/responses/DuplicateName"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    patch:
+      tags: [Boardgames]
+      summary: แก้ไขข้อมูลบอร์ดเกมบางฟิลด์
+      operationId: updateBoardgame
+      security:
+        - bearerAuth: []
+      description: |
+        ส่งเฉพาะฟิลด์ที่ต้องการแก้ไข ระบบจะนำค่าที่ส่งมารวมกับค่าเดิม
+        แล้วตรวจว่า `maxPlayers >= minPlayers` และ `minPlayers >= 1`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BoardgamePatchInput"
+      responses:
+        "200":
+          description: แก้ไขสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: แก้ไขข้อมูลบอร์ดเกมสำเร็จ
+                  data:
+                    $ref: "#/components/schemas/BoardgameBase"
+        "400":
+          description: id หรือข้อมูลที่ส่งมาไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                noUpdates:
+                  summary: ไม่ได้ส่งฟิลด์ใดมาเลย
+                  value:
+                    error:
+                      code: NO_UPDATES
+                      message: กรุณาระบุข้อมูลที่ต้องการแก้ไข
+                invalidField:
+                  summary: ส่งฟิลด์ที่ไม่อนุญาต
+                  value:
+                    error:
+                      code: INVALID_FIELD
+                      message: "ไม่อนุญาตให้แก้ไข field: price"
+                invalidName:
+                  summary: name ว่าง ไม่ใช่ข้อความ หรือยาวเกิน 100 ตัวอักษร
+                  value:
+                    error:
+                      code: INVALID_NAME
+                      message: name ต้องเป็นข้อความที่ไม่ว่างเปล่าและยาวไม่เกิน 100 ตัวอักษร
+                invalidPlayers:
+                  summary: จำนวนผู้เล่นไม่ใช่จำนวนเต็ม
+                  value:
+                    error:
+                      code: INVALID_PLAYERS
+                      message: maxPlayers ต้องเป็นตัวเลขจำนวนเต็ม
+                invalidPlayerRange:
+                  summary: ค่ารวมแล้ว maxPlayers น้อยกว่า minPlayers
+                  value:
+                    error:
+                      code: INVALID_PLAYER_RANGE
+                      message: จำนวนผู้เล่นต้องอยู่ระหว่าง 1 ถึง 2147483647 และ maxPlayers ต้องมากกว่าหรือเท่ากับ minPlayers
+                malformedJson:
+                  $ref: "#/components/examples/MalformedJson"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "409":
+          $ref: "#/components/responses/DuplicateName"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    delete:
+      tags: [Boardgames]
+      summary: ลบบอร์ดเกม (เฉพาะ admin)
+      operationId: deleteBoardgame
+      security:
+        - bearerAuth: []
+      description: ความสัมพันธ์กับหมวดหมู่ของเกมนี้จะถูกลบตามไปด้วย (ON DELETE CASCADE)
+      responses:
+        "200":
+          description: ลบสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOnly"
+              example:
+                message: ลบบอร์ดเกมสำเร็จ
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/categories:
+    get:
+      tags: [Categories]
+      summary: ดึงรายการหมวดหมู่ทั้งหมด
+      operationId: listCategories
+      description: คืนหมวดหมู่ทุกรายการพร้อมจำนวนบอร์ดเกมในแต่ละหมวด (`boardgameCount`)
+      responses:
+        "200":
+          description: สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CategoryWithCount"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    post:
+      tags: [Categories]
+      summary: เพิ่มหมวดหมู่ใหม่
+      operationId: createCategory
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryInput"
+      responses:
+        "201":
+          description: เพิ่มหมวดหมู่สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: เพิ่มหมวดหมู่สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/CategoryNameInvalid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/DuplicateCategory"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/categories/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CategoryId"
+
+    get:
+      tags: [Categories]
+      summary: ดึงข้อมูลหมวดหมู่ตาม ID
+      operationId: getCategoryById
+      responses:
+        "200":
+          description: สำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/CategoryWithCount"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/CategoryNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    put:
+      tags: [Categories]
+      summary: แก้ไขชื่อหมวดหมู่
+      operationId: updateCategory
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryInput"
+      responses:
+        "200":
+          description: แก้ไขสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: แก้ไขหมวดหมู่สำเร็จ
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "400":
+          description: id หรือ name ไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                missingFields:
+                  summary: ไม่ได้ส่ง name
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ name
+                invalidName:
+                  summary: name ว่างหรือยาวเกิน 100 ตัวอักษร
+                  value:
+                    error:
+                      code: INVALID_NAME
+                      message: name ต้องเป็นข้อความที่ไม่ว่างเปล่าและยาวไม่เกิน 100 ตัวอักษร
+                malformedJson:
+                  $ref: "#/components/examples/MalformedJson"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CategoryNotFound"
+        "409":
+          $ref: "#/components/responses/DuplicateCategory"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    delete:
+      tags: [Categories]
+      summary: ลบหมวดหมู่ (เฉพาะ admin)
+      operationId: deleteCategory
+      security:
+        - bearerAuth: []
+      description: ความสัมพันธ์กับบอร์ดเกมของหมวดนี้จะถูกลบตามไปด้วย (ON DELETE CASCADE) แต่ตัวบอร์ดเกมไม่ถูกลบ
+      responses:
+        "200":
+          description: ลบสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOnly"
+              example:
+                message: ลบหมวดหมู่สำเร็จ
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/CategoryNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/boardgames/{id}/categories:
+    parameters:
+      - $ref: "#/components/parameters/BoardgameId"
+
+    get:
+      tags: [Boardgame Categories]
+      summary: ดึงหมวดหมู่ทั้งหมดของบอร์ดเกม
+      operationId: listBoardgameCategories
+      responses:
+        "200":
+          description: สำเร็จ (ถ้าเกมยังไม่มีหมวดหมู่ จะได้ `data` เป็นอาร์เรย์ว่าง)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/BoardgameNotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+    post:
+      tags: [Boardgame Categories]
+      summary: เพิ่มหมวดหมู่ให้บอร์ดเกม
+      operationId: addCategoryToBoardgame
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryLinkInput"
+      responses:
+        "201":
+          description: เพิ่มหมวดหมู่ให้บอร์ดเกมสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: เพิ่มหมวดหมู่ให้บอร์ดเกมสำเร็จ
+                  data:
+                    type: object
+                    properties:
+                      boardgame_id:
+                        type: integer
+                        example: 2
+                      category:
+                        $ref: "#/components/schemas/Category"
+        "400":
+          description: id หรือ category_id ไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id หรือ category_id ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_ID
+                      message: category_id ต้องเป็นตัวเลขจำนวนเต็มบวก
+                missingFields:
+                  summary: ไม่ได้ส่ง category_id
+                  value:
+                    error:
+                      code: MISSING_FIELDS
+                      message: กรุณาระบุ category_id
+                malformedJson:
+                  $ref: "#/components/examples/MalformedJson"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: ไม่พบบอร์ดเกมหรือไม่พบหมวดหมู่
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                boardgameNotFound:
+                  summary: ไม่พบบอร์ดเกม
+                  value:
+                    error:
+                      code: NOT_FOUND
+                      message: ไม่พบบอร์ดเกม
+                categoryNotFound:
+                  summary: ไม่พบหมวดหมู่
+                  value:
+                    error:
+                      code: CATEGORY_NOT_FOUND
+                      message: ไม่พบหมวดหมู่
+        "409":
+          description: บอร์ดเกมนี้อยู่ในหมวดหมู่นี้อยู่แล้ว
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: ALREADY_LINKED
+                  message: บอร์ดเกมนี้อยู่ในหมวดหมู่นี้อยู่แล้ว
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/boardgames/{id}/categories/{categoryId}:
+    delete:
+      tags: [Boardgame Categories]
+      summary: ถอดหมวดหมู่ออกจากบอร์ดเกม
+      operationId: removeCategoryFromBoardgame
+      security:
+        - bearerAuth: []
+      description: ลบเฉพาะความสัมพันธ์ ไม่ลบบอร์ดเกมหรือหมวดหมู่
+      parameters:
+        - $ref: "#/components/parameters/BoardgameId"
+        - name: categoryId
+          in: path
+          required: true
+          description: ID ของหมวดหมู่
+          schema:
+            type: integer
+            minimum: 1
+            example: 1
+      responses:
+        "200":
+          description: ถอดหมวดหมู่สำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOnly"
+              example:
+                message: ถอดหมวดหมู่ออกจากบอร์ดเกมสำเร็จ
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: ไม่พบความสัมพันธ์ระหว่างบอร์ดเกมกับหมวดหมู่นี้
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: LINK_NOT_FOUND
+                  message: ไม่พบความสัมพันธ์ระหว่างบอร์ดเกมกับหมวดหมู่นี้
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  # ==========================================
+  # Internal Services (Gateway และ service ด้วยกันเป็นผู้เรียก)
+  # ==========================================
+
+  /health:
+    servers:
+      - url: http://localhost:{port}
+        description: service ภายใน (เลือกพอร์ต)
+        variables:
+          port:
+            enum: ["4001", "4002", "4003"]
+            default: "4001"
+            description: 4001 = boardgame-service, 4002 = notification-service, 4003 = auth-service
+    get:
+      tags: [Internal Services]
+      summary: ตรวจสอบสถานะของ service (ทุก service ใช้รูปแบบเดียวกัน)
+      operationId: getServiceHealth
+      description: |
+        Gateway เรียก endpoint นี้ของทุก service เพื่อสรุปผลใน `GET /api/v1/health`
+        - boardgame-service และ auth-service: ตอบ 503 ถ้าฐานข้อมูลใช้ไม่ได้ และมีฟิลด์ `database`
+        - notification-service: มีฟิลด์ `discordConfigured`
+      responses:
+        "200":
+          description: service ทำงานอยู่
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceHealth"
+              examples:
+                boardgame:
+                  summary: boardgame-service (4001)
+                  value: { status: ok, service: boardgame-service, database: up }
+                notification:
+                  summary: notification-service (4002)
+                  value: { status: ok, service: notification-service, discordConfigured: true }
+                auth:
+                  summary: auth-service (4003)
+                  value: { status: ok, service: auth-service, database: up }
+        "503":
+          description: boardgame-service ต่อฐานข้อมูลไม่ได้
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceHealth"
+              example: { status: down, service: boardgame-service, database: down }
+
+  /notifications:
+    servers:
+      - url: http://localhost:4002
+        description: notification-service
+    get:
+      tags: [Internal Services]
+      summary: ดึงประวัติการแจ้งเตือน (เก็บในหน่วยความจำ)
+      operationId: getNotificationHistory
+      description: Gateway ส่งต่อ `GET /api/v1/notifications` มาที่ endpoint นี้
+      responses:
+        "200":
+          $ref: "#/components/responses/NotificationHistory"
+    post:
+      tags: [Internal Services]
+      summary: ส่งแจ้งเตือนบอร์ดเกมใหม่ไปที่ Discord (notification-service)
+      operationId: sendNotification
+      description: |
+        boardgame-service เรียก endpoint นี้ตรง (ไม่ผ่าน Gateway) หลังเพิ่มบอร์ดเกมสำเร็จ
+        service จะส่งข้อความไป Discord **1 ครั้ง** พร้อม timeout (`DISCORD_TIMEOUT_MS` ค่าเริ่มต้น 1500 ms)
+
+        - ส่งสำเร็จ: 200 `sent = true`
+        - ไม่ได้ตั้งค่า webhook: 200 `sent = false` (ไม่ใช่ความผิดพลาดชั่วคราว ผู้เรียกไม่ต้อง retry)
+        - Discord ล้มเหลว/ติดต่อไม่ได้: 502 / Discord ตอบช้าเกิน timeout: 504
+          (เป็น 5xx เพื่อให้ boardgame-service retry ตามกลไกใน `src/services/external-api.js`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationRequest"
+      responses:
+        "200":
+          description: ประมวลผลแล้ว (ดูผลที่ `data.sent`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: ส่งแจ้งเตือนไปที่ Discord แล้ว
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 1
+                      sent:
+                        type: boolean
+                        example: true
+              examples:
+                sent:
+                  summary: ส่งสำเร็จ
+                  value:
+                    message: ส่งแจ้งเตือนไปที่ Discord แล้ว
+                    data: { id: 1, sent: true }
+                skipped:
+                  summary: ไม่ได้ตั้งค่า webhook
+                  value:
+                    message: ไม่ได้ตั้งค่า Discord Webhook จึงไม่ได้ส่งแจ้งเตือน
+                    data: { id: 2, sent: false }
+        "400":
+          description: ข้อมูลคำขอไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidType:
+                  summary: type ไม่ถูกต้อง
+                  value:
+                    error:
+                      code: INVALID_NOTIFICATION
+                      message: type ต้องเป็น "boardgame.created"
+                invalidBoardgame:
+                  summary: ข้อมูลบอร์ดเกมไม่ครบ
+                  value:
+                    error:
+                      code: INVALID_NOTIFICATION
+                      message: boardgame ต้องมี name (ข้อความ), minPlayers และ maxPlayers (จำนวนเต็ม)
+                malformedJson:
+                  $ref: "#/components/examples/MalformedJson"
+        "502":
+          description: Discord ตอบผิดพลาดหรือติดต่อไม่ได้
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: DISCORD_ERROR
+                  message: Discord ตอบ HTTP 503
+        "504":
+          description: Discord ไม่ตอบภายในเวลาที่กำหนด
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: DISCORD_TIMEOUT
+                  message: Discord ไม่ตอบภายใน 1500 ms
+
+  /auth/register:
+    servers:
+      - url: http://localhost:4003
+        description: auth-service
+    post:
+      tags: [Internal Services]
+      summary: สมัครสมาชิก (auth-service)
+      operationId: authServiceRegister
+      description: Gateway ส่งต่อ `POST /api/v1/auth/register` มาที่นี่ (request/response เหมือนกัน)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterInput"
+      responses:
+        "201":
+          description: สมัครสำเร็จ
+        "400":
+          description: ข้อมูลไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: username ถูกใช้แล้ว
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/login:
+    servers:
+      - url: http://localhost:4003
+        description: auth-service
+    post:
+      tags: [Internal Services]
+      summary: ตรวจรหัสผ่านและออก JWT (auth-service)
+      operationId: authServiceLogin
+      description: Gateway ส่งต่อ `POST /api/v1/auth/login` มาที่นี่ token ลงชื่อด้วย HS256 + `JWT_SECRET` อายุ `JWT_EXPIRES_IN` (ค่าเริ่มต้น 2h) payload มี `sub` (id), `username` และ `role`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: เข้าสู่ระบบสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResult"
+        "400":
+          description: ส่งข้อมูลไม่ครบ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: username หรือ password ไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: ยังไม่ได้ตั้งค่า JWT_SECRET
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/me:
+    servers:
+      - url: http://localhost:4003
+        description: auth-service
+    get:
+      tags: [Internal Services]
+      summary: ข้อมูลผู้ใช้จาก token (auth-service ตรวจ token ซ้ำเอง)
+      operationId: authServiceMe
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: ข้อมูลผู้ใช้
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/User"
+        "401":
+          description: token ไม่ถูกต้อง หมดอายุ หรือไม่พบผู้ใช้
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: token จาก `POST /api/v1/auth/login` (ใส่เฉพาะ token ไม่ต้องพิมพ์คำว่า Bearer)
+
+  headers:
+    XCache:
+      description: "`HIT` = ตอบจาก cache ของ boardgame-service (ไม่ได้อ่านฐานข้อมูล), `MISS` = อ่านจากฐานข้อมูลแล้วเก็บลง cache"
+      schema:
+        type: string
+        enum: [HIT, MISS]
+
+  parameters:
+    BoardgameId:
+      name: id
+      in: path
+      required: true
+      description: ID ของบอร์ดเกม (จำนวนเต็มบวก)
+      schema:
+        type: integer
+        minimum: 1
+        example: 1
+    CategoryId:
+      name: id
+      in: path
+      required: true
+      description: ID ของหมวดหมู่ (จำนวนเต็มบวก)
+      schema:
+        type: integer
+        minimum: 1
+        example: 1
+
+  examples:
+    MalformedJson:
+      summary: JSON ใน body ผิดรูปแบบ
+      value:
+        error:
+          code: entity.parse.failed
+          message: Expected double-quoted property name in JSON at position 20 (line 3 column 1)
+
+  schemas:
+    Boardgame:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 3
+        name:
+          type: string
+          example: Catan
+        minPlayers:
+          type: integer
+          example: 3
+        maxPlayers:
+          type: integer
+          example: 4
+        categories:
+          type: string
+          nullable: true
+          description: ชื่อหมวดหมู่คั่นด้วยจุลภาค เป็น `null` ถ้าเกมยังไม่มีหมวดหมู่
+          example: Strategy,Party Game
+
+    BoardgameBase:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 4
+        name:
+          type: string
+          example: Carcassonne
+        minPlayers:
+          type: integer
+          example: 2
+        maxPlayers:
+          type: integer
+          example: 5
+
+    BoardgameInput:
+      type: object
+      required: [name, minPlayers, maxPlayers]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: ชื่อบอร์ดเกม (ห้ามซ้ำกับที่มีอยู่)
+          example: Carcassonne
+        minPlayers:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          example: 2
+        maxPlayers:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: ต้องมากกว่าหรือเท่ากับ `minPlayers`
+          example: 5
+
+    BoardgamePatchInput:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: Carcassonne Deluxe
+        minPlayers:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          example: 2
+        maxPlayers:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          example: 6
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Strategy
+
+    CategoryWithCount:
+      allOf:
+        - $ref: "#/components/schemas/Category"
+        - type: object
+          properties:
+            boardgameCount:
+              type: integer
+              description: จำนวนบอร์ดเกมในหมวดหมู่นี้
+              example: 2
+
+    CategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: ชื่อหมวดหมู่ (ห้ามซ้ำกับที่มีอยู่)
+          example: Co-op
+
+    CategoryLinkInput:
+      type: object
+      required: [category_id]
+      properties:
+        category_id:
+          type: integer
+          minimum: 1
+          example: 2
+
+    Notification:
+      type: object
+      description: ผลการส่งแจ้งเตือนไปยัง API ภายนอก (Discord Webhook)
+      properties:
+        sent:
+          type: boolean
+          description: ส่งแจ้งเตือนสำเร็จหรือไม่
+          example: true
+        attempts:
+          type: integer
+          description: จำนวนครั้งที่เรียก API ภายนอก (ครั้งแรก + retry)
+          example: 1
+        message:
+          type: string
+          example: ส่งแจ้งเตือนไปที่ Discord แล้ว
+
+    SystemHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        services:
+          type: object
+          properties:
+            gateway:
+              type: string
+              enum: [up]
+            boardgameService:
+              type: string
+              enum: [up, down]
+            database:
+              type: string
+              enum: [up, down, unknown]
+              description: unknown เมื่อติดต่อ boardgame-service ไม่ได้
+            notificationService:
+              type: string
+              enum: [up, down]
+            authService:
+              type: string
+              enum: [up, down]
+
+    ServiceHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        service:
+          type: string
+          enum: [boardgame-service, notification-service, auth-service]
+        database:
+          type: string
+          enum: [up, down]
+          description: เฉพาะ boardgame-service และ auth-service
+        discordConfigured:
+          type: boolean
+          description: เฉพาะ notification-service
+
+    NotificationRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        type:
+          type: string
+          example: boardgame.created
+        message:
+          type: string
+          example: "🎲 เพิ่มบอร์ดเกมใหม่: Carcassonne (2-5 ผู้เล่น)"
+        status:
+          type: string
+          enum: [sent, skipped, failed]
+          description: sent = ส่งสำเร็จ, skipped = ไม่ได้ตั้งค่า webhook, failed = Discord ล้มเหลว
+        error:
+          type: string
+          description: สาเหตุ (มีเฉพาะเมื่อ status เป็น skipped หรือ failed)
+          example: Discord ตอบ HTTP 503
+        createdAt:
+          type: string
+          format: date-time
+
+    NotificationRequest:
+      type: object
+      required: [type, boardgame]
+      properties:
+        type:
+          type: string
+          enum: [boardgame.created]
+        boardgame:
+          type: object
+          required: [name, minPlayers, maxPlayers]
+          properties:
+            id:
+              type: integer
+              example: 4
+            name:
+              type: string
+              example: Carcassonne
+            minPlayers:
+              type: integer
+              example: 2
+            maxPlayers:
+              type: integer
+              example: 5
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          description: จำนวนบอร์ดเกมทั้งหมดที่ตรงเงื่อนไข (ก่อนแบ่งหน้า)
+          example: 3
+        totalPages:
+          type: integer
+          example: 1
+
+    MessageOnly:
+      type: object
+      properties:
+        message:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: รหัสข้อผิดพลาดสำหรับให้โปรแกรมนำไปใช้
+            message:
+              type: string
+              description: ข้อความอธิบายข้อผิดพลาด
+
+    LoginInput:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: alice
+        password:
+          type: string
+          format: password
+          example: correct-horse
+
+    RegisterInput:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          pattern: "^[A-Za-z0-9_]{3,30}$"
+          example: alice
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          example: correct-horse
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: alice
+        role:
+          type: string
+          enum: [member, admin]
+          description: admin ลบบอร์ดเกม/หมวดหมู่ได้ / member เพิ่มและแก้ไขได้
+        createdAt:
+          type: string
+          format: date-time
+
+    LoginResult:
+      type: object
+      properties:
+        message:
+          type: string
+          example: เข้าสู่ระบบสำเร็จ
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            tokenType:
+              type: string
+              example: Bearer
+            expiresIn:
+              type: string
+              example: 2h
+            user:
+              $ref: "#/components/schemas/User"
+
+  responses:
+    Unauthorized:
+      description: ไม่ได้เข้าสู่ระบบ / token หมดอายุ / token ไม่ถูกต้อง (Gateway ไม่ส่งต่อคำขอ)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            noToken:
+              summary: ไม่แนบ token
+              value:
+                error: { code: UNAUTHORIZED, message: กรุณาเข้าสู่ระบบก่อน (ไม่พบ token) }
+            expired:
+              summary: token หมดอายุ
+              value:
+                error: { code: TOKEN_EXPIRED, message: การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่ }
+            invalid:
+              summary: token ปลอมหรือเสีย
+              value:
+                error: { code: INVALID_TOKEN, message: token ไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่ }
+
+    Forbidden:
+      description: เข้าสู่ระบบแล้วแต่ไม่ใช่ admin (Gateway ไม่ส่งต่อคำขอ) ถ้าเพิ่งถูกเลื่อนเป็น admin ให้เข้าสู่ระบบใหม่เพื่อรับ token ที่มี role ล่าสุด
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: FORBIDDEN, message: เฉพาะผู้ดูแลระบบ (admin) เท่านั้นที่ลบข้อมูลได้ }
+
+    TooManyAuthAttempts:
+      description: พยายามเข้าสู่ระบบ/สมัครสมาชิกเกิน 10 ครั้งต่อนาที
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: TOO_MANY_REQUESTS, message: พยายามเข้าสู่ระบบ/สมัครสมาชิกบ่อยเกินไป กรุณาลองใหม่ในอีก 42 วินาที }
+
+    ServiceUnavailable:
+      description: Gateway ติดต่อ service ปลายทางไม่ได้
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: SERVICE_UNAVAILABLE
+              message: boardgame-service ไม่พร้อมใช้งานในขณะนี้
+
+    GatewayTimeout:
+      description: service ปลายทางไม่ตอบภายใน GATEWAY_TIMEOUT_MS (ค่าเริ่มต้น 10 วินาที)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: GATEWAY_TIMEOUT
+              message: boardgame-service ไม่ตอบภายในเวลาที่กำหนด กรุณาลองใหม่
+
+    NotificationHistory:
+      description: สำเร็จ (ใหม่สุดอยู่ก่อน สูงสุด 50 รายการ)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: สำเร็จ
+              data:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NotificationRecord"
+
+    InvalidId:
+      description: id ไม่ถูกต้อง (ต้องเป็นจำนวนเต็มบวก)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: INVALID_ID
+              message: id ต้องเป็นตัวเลขจำนวนเต็มบวก
+
+    BoardgameNotFound:
+      description: ไม่พบบอร์ดเกม
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: NOT_FOUND
+              message: ไม่พบบอร์ดเกม
+
+    CategoryNotFound:
+      description: ไม่พบหมวดหมู่
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: CATEGORY_NOT_FOUND
+              message: ไม่พบหมวดหมู่
+
+    DuplicateName:
+      description: มีชื่อบอร์ดเกมนี้อยู่ในระบบแล้ว
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: DUPLICATE_NAME
+              message: มีชื่อบอร์ดเกมนี้อยู่ในระบบแล้ว
+
+    DuplicateCategory:
+      description: มีชื่อหมวดหมู่นี้อยู่ในระบบแล้ว
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: DUPLICATE_CATEGORY
+              message: มีชื่อหมวดหมู่นี้อยู่ในระบบแล้ว
+
+    CategoryNameInvalid:
+      description: name ไม่ถูกต้อง
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            missingFields:
+              summary: ไม่ได้ส่ง name
+              value:
+                error:
+                  code: MISSING_FIELDS
+                  message: กรุณาระบุ name
+            invalidName:
+              summary: name ว่างหรือยาวเกิน 100 ตัวอักษร
+              value:
+                error:
+                  code: INVALID_NAME
+                  message: name ต้องเป็นข้อความที่ไม่ว่างเปล่าและยาวไม่เกิน 100 ตัวอักษร
+            malformedJson:
+              $ref: "#/components/examples/MalformedJson"
+
+    PayloadTooLarge:
+      description: request body ใหญ่เกิน 10 KB
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: entity.too.large
+              message: request entity too large
+
+    ServerError:
+      description: เกิดข้อผิดพลาดภายในระบบ (เช่น เชื่อมต่อฐานข้อมูลไม่ได้)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: INTERNAL_SERVER_ERROR
+              message: เกิดข้อผิดพลาดที่ไม่คาดคิดภายในระบบ

@@ -118,7 +118,8 @@ h2 {
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
 }
 
 .link {
@@ -180,6 +181,7 @@ h2 {
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap; /* จอแคบ: ตัวกรอง/การเรียง/ปุ่มขึ้นบรรทัดใหม่แทนการล้นจอ */
   gap: 8px;
 }
 
@@ -196,8 +198,9 @@ select {
 }
 
 .toolbar select {
+  flex: 1 1 150px;
   width: auto;
-  min-width: 160px;
+  min-width: 0;
 }
 
 input:focus,
@@ -347,7 +350,6 @@ input[aria-invalid="true"] {
 
 /* ===== Game list ===== */
 .game-list,
-.notif-list,
 .chip-list {
   list-style: none;
   margin: 0;
@@ -417,6 +419,10 @@ input[aria-invalid="true"] {
   font-weight: 600;
 }
 
+.chip.is-editing {
+  outline: 2px solid var(--primary);
+}
+
 .chip-muted {
   background: var(--surface-2);
   color: var(--muted);
@@ -430,30 +436,6 @@ input[aria-invalid="true"] {
   color: inherit;
   font: inherit;
   cursor: pointer;
-}
-
-/* ===== Notifications ===== */
-.notif-list {
-  display: grid;
-  gap: 8px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.notif {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 0.86rem;
-}
-
-.notif p {
-  margin: 0;
-}
-
-.notif-time {
-  color: var(--muted);
-  font-size: 0.78rem;
 }
 
 /* ===== Pills ===== */
@@ -487,15 +469,6 @@ input[aria-invalid="true"] {
   color: var(--danger);
 }
 
-.badge {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
 /* ===== Dialog ===== */
 dialog {
   width: min(440px, calc(100vw - 32px));
@@ -517,6 +490,28 @@ dialog::backdrop {
   margin-bottom: 12px;
 }
 
+/* ===== Pagination ===== */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  margin-top: 14px;
+}
+
+.pager-info,
+.pager-size {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.pager-size select {
+  width: auto;
+  margin: 0 4px;
+  padding: 4px 8px;
+}
+
 .chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -527,6 +522,12 @@ dialog::backdrop {
 .link-form {
   display: flex;
   gap: 8px;
+}
+
+.field-hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 /* ===== Toasts ===== */
@@ -561,4 +562,98 @@ dialog::backdrop {
 .toast.is-warn {
   background: var(--warn);
   color: #fff;
+}
+
+/* ===== การแจ้งเตือนล่าสุด ===== */
+.notification-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notification {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: start;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.notification-text {
+  overflow-wrap: anywhere;
+}
+
+.notification-time {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.chip-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.chip-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ===== การเข้าสู่ระบบ ===== */
+/* <body class="is-guest"> = ยังไม่เข้าสู่ระบบ: ซ่อนส่วนที่ต้องเข้าสู่ระบบ / เข้าแล้ว: ซ่อนส่วนสำหรับผู้เยี่ยมชม */
+.is-guest .requires-auth,
+body:not(.is-guest) .guest-only {
+  display: none !important;
+}
+
+.user-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.guest-only .hint {
+  margin-bottom: 12px;
+}
+
+.auth-switch {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.role-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 0.75rem;
+  font-weight: 700;
+  vertical-align: middle;
 }
